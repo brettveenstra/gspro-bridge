@@ -1,75 +1,66 @@
 # GSProBridge
 
-A unified Windows .NET adapter for Garmin R10 launch monitors with webcam putting integration and GSPro golf simulator connectivity.
+**One unified bridge** for multiple launch monitor and putting devices to GSPro golf simulator.
 
-## Overview
+## Why GSProBridge?
 
-GSProBridge provides a lightweight, transparent solution for connecting your Garmin R10 launch monitor and webcam putting setup to GSPro golf simulator software. This project aims to combine the best features from existing community solutions into a single, well-architected application.
+### Multi-Device Connection
+Connect **multiple shot sources** through a single application:
+- **Garmin R10** launch monitor (full swing)
+- **Webcam** putting adapter (ball tracking)
+- **Future devices** - architecture supports additional input sources
 
-## Features
+No more juggling multiple apps or manual coordination between devices.
 
-- **Direct Bluetooth R10 Connection** - Native Windows Bluetooth connectivity to Garmin R10 launch monitor
-- **E6 Connect API Server** - Acts as an E6 Connect compatible server for R10 integration
-- **GSPro Open API Client** - Direct integration with GSPro using their Open API v1
-- **Webcam Putting Integration** - Ball tracking for putting using computer vision (OpenCV)
-- **Transparent Configuration** - Clear, documented settings with sensible defaults
-- **Explicit C# Style** - Clean, readable code with explicit typing and verbose syntax
+### Transparent Configuration
+- **Clear settings** - documented `appsettings.json` with sensible defaults
+- **No hidden magic** - every configuration option explained
+- **Environment overrides** - adjust settings without editing files
+
+### Stability & Performance
+- **Just works** - auto-reconnects when devices disconnect
+- **Fast shot processing** - no lag between swing and simulator response
+- **Won't crash** - handles multiple devices without freezing or errors
+- **Runs in background** - minimal system resources, doesn't slow down your PC
+
+### GSPro Compatibility
+- **Works with GSPro** - directly connects to GSPro simulator
+- **Smart mode switching** - automatically knows when you're putting vs full swing
+- **Shot validation** - filters out bad readings before they reach the simulator
+
+## Status
+
+**⚠️ Early Development - Not Ready for Use**
+
+Currently building the foundation (R10 → GSPro connection). Check back soon or watch this repo for updates.
+
+## How It Works
+
+GSProBridge runs on your PC and connects:
+1. Your **R10 launch monitor** (via Bluetooth)
+2. Your **webcam** (for putting, optional)
+3. **GSPro simulator** (already running on your PC)
+
+That's it. Hit a shot, it shows up in GSPro. No manual switching between apps.
 
 ## Requirements
 
-- **OS**: Windows 10/11 (required for Bluetooth LE support)
-- **.NET**: .NET 8.0 or later
-- **Hardware**:
-  - Garmin R10 launch monitor
-  - Bluetooth adapter (if not built-in)
-  - Webcam (for putting integration, optional)
-- **Software**: GSPro golf simulator
-
-## Current Status
-
-**⚠️ Early Development** - This project is currently in foundation/scaffolding phase. Core features are not yet implemented.
-
-### Roadmap
-
-- [ ] Solution architecture and project structure
-- [ ] Garmin R10 Bluetooth protocol implementation
-- [ ] E6 Connect HTTP server
-- [ ] GSPro Open API client
-- [ ] Webcam ball tracking integration
-- [ ] Configuration management
-- [ ] Windows desktop GUI
-- [ ] Installer/deployment
+- Windows 10/11
+- GSPro golf simulator
+- Garmin R10 launch monitor (paired via Windows Bluetooth settings)
+- Webcam (optional, for putting)
 
 ## Installation
 
-_Coming soon - project not yet ready for use_
+**Not available yet.** When ready:
+1. Download latest release
+2. Run GSProBridge.exe
+3. Start GSPro
+4. Hit shots
 
-## Building from Source
+## Developer Documentation
 
-Requires .NET 8.0 SDK or later:
-
-```bash
-dotnet build
-dotnet run --project src/GSProBridge
-```
-
-## Configuration
-
-_Documentation coming soon_
-
-## Contributing
-
-This is an open-source project. Contributions, issues, and feature requests are welcome.
-
-## Architecture
-
-The project follows clean architecture principles with explicit separation of concerns:
-- Domain models and interfaces
-- Infrastructure implementations (Bluetooth, HTTP, computer vision)
-- Application services and orchestration
-- Presentation layer (console/GUI)
-
-See `docs/architecture.md` (coming soon) for detailed design documentation.
+See **[ARCHITECTURE.md](ARCHITECTURE.md)** for technical implementation details.
 
 ## Credits
 
