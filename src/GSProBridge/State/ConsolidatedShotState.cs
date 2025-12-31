@@ -1,5 +1,4 @@
 using GSProBridge.Models;
-using System.Threading;
 
 namespace GSProBridge.State;
 
@@ -24,7 +23,7 @@ public class ConsolidatedShotState : IDisposable
     /// </summary>
     public void Update(RawShotEvent evt)
     {
-        Interlocked.Increment(ref _eventsReceived);
+        _ = Interlocked.Increment(ref _eventsReceived);
 
         _lock.EnterWriteLock();
         try
@@ -32,11 +31,11 @@ public class ConsolidatedShotState : IDisposable
             if (ShouldAcceptEvent(evt))
             {
                 _currentSnapshot = evt.DomainData;
-                Interlocked.Increment(ref _version);
+                _ = Interlocked.Increment(ref _version);
             }
             else
             {
-                Interlocked.Increment(ref _eventsRejected);
+                _ = Interlocked.Increment(ref _eventsRejected);
             }
         }
         finally
@@ -82,7 +81,7 @@ public class ConsolidatedShotState : IDisposable
         // Reject webcam if R10 data is fresh (<5s old)
         if (evt.Source == InputSource.Webcam && _currentSnapshot.Source == InputSource.R10)
         {
-            var age = DateTimeOffset.UtcNow - _currentSnapshot.Timestamp;
+            TimeSpan age = DateTimeOffset.UtcNow - _currentSnapshot.Timestamp;
             if (age < TimeSpan.FromSeconds(5))
             {
                 return false;  // R10 data still fresh, webcam can't override
@@ -93,6 +92,9 @@ public class ConsolidatedShotState : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Releases resources used by the consolidated shot state
+    /// </summary>
     public void Dispose()
     {
         _lock?.Dispose();

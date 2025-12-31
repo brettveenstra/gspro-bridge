@@ -6,7 +6,27 @@ namespace GSProBridge.Models;
 /// </summary>
 public record RawShotEvent
 {
-    public required InputSource Source { get; init; }
-    public required DateTimeOffset Timestamp { get; init; }
-    public required ShotSnapshot DomainData { get; init; }
+    /// <summary>
+    /// Gets the source of the shot data (R10 or webcam)
+    /// </summary>
+    public required InputSource Source
+    {
+        get; init;
+    }
+
+    /// <summary>
+    /// Gets the timestamp when the shot was captured
+    /// </summary>
+    public required DateTimeOffset Timestamp
+    {
+        get; init;
+    }
+
+    /// <summary>
+    /// Gets the shot snapshot data
+    /// </summary>
+    public required ShotSnapshot DomainData
+    {
+        get; init;
+    }
 }

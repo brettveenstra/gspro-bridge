@@ -6,35 +6,35 @@ namespace GSProBridge.Models;
 /// </summary>
 public record ShotSnapshot
 {
-    public required InputSource Source { get; init; }
-    public required DateTimeOffset Timestamp { get; init; }
-    public required BallMetrics Ball { get; init; }
-    public ClubMetrics? Club { get; init; }
-}
+    /// <summary>
+    /// Gets the source of the shot data (R10 or webcam)
+    /// </summary>
+    public required InputSource Source
+    {
+        get; init;
+    }
 
-/// <summary>
-/// Ball flight metrics (consistent across R10 and webcam).
-/// </summary>
-public record BallMetrics
-{
-    public required double Speed { get; init; }              // MPH
-    public required double HLA { get; init; }                 // Horizontal Launch Angle (degrees)
-    public required double VLA { get; init; }                 // Vertical Launch Angle (degrees)
-    public required double SpinAxis { get; init; }            // Spin axis tilt (degrees, -90 to +90)
-    public required double TotalSpin { get; init; }           // RPM
+    /// <summary>
+    /// Gets the timestamp when the shot was captured
+    /// </summary>
+    public required DateTimeOffset Timestamp
+    {
+        get; init;
+    }
 
-    // Calculated fields (optional)
-    public double? BackSpin { get; init; }                    // RPM
-    public double? SideSpin { get; init; }                    // RPM
-}
+    /// <summary>
+    /// Gets the ball flight metrics
+    /// </summary>
+    public required BallMetrics Ball
+    {
+        get; init;
+    }
 
-/// <summary>
-/// Club metrics (only available from R10, not webcam).
-/// </summary>
-public record ClubMetrics
-{
-    public required double Speed { get; init; }               // Club head speed (MPH)
-    public double? AngleOfAttack { get; init; }               // Degrees
-    public double? FaceToTarget { get; init; }                // Degrees
-    public double? Path { get; init; }                        // Degrees
+    /// <summary>
+    /// Gets the club metrics (null for webcam putting shots)
+    /// </summary>
+    public ClubMetrics? Club
+    {
+        get; init;
+    }
 }

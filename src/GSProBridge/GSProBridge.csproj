@@ -7,12 +7,22 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>12</LangVersion>
+
+    <!-- Code quality: warnings as errors -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- Debug symbols: always generate PDB files (even in Release) -->
+    <DebugType>portable</DebugType>
+    <DebugSymbols>true</DebugSymbols>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Bluetooth & Device Integration -->
     <PackageReference Include="InTheHand.BluetoothLE" Version="4.0.37" />
     <PackageReference Include="Google.Protobuf" Version="3.25.2" />
+    <PackageReference Include="Grpc.Tools" Version="2.60.0" PrivateAssets="All" />
 
     <!-- Resilience & Networking -->
     <PackageReference Include="Polly" Version="8.2.1" />
@@ -23,8 +33,10 @@
     <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
     <PackageReference Include="Serilog.Extensions.Hosting" Version="8.0.0" />
+    <PackageReference Include="Serilog.Settings.Configuration" Version="8.0.0" />
 
-    <!-- Configuration -->
+    <!-- Hosting & Configuration -->
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="8.0.0" />
@@ -37,6 +49,10 @@
     <None Update="appsettings.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Protos\R10\GarminR10.proto" GrpcServices="None" />
   </ItemGroup>
 
 </Project>
