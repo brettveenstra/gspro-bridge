@@ -1,0 +1,77 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# C# source files
+*.cs text diff=csharp
+
+# Visual Studio solution and project files
+*.sln text eol=crlf
+*.csproj text eol=lf
+*.vbproj text eol=lf
+*.vcxproj text eol=lf
+*.vcxproj.filters text eol=lf
+*.proj text eol=lf
+*.projitems text eol=lf
+*.shproj text eol=lf
+
+# XML config files
+*.props text eol=lf
+*.targets text eol=lf
+*.ruleset text eol=lf
+*.config text eol=lf
+*.nuspec text eol=lf
+*.resx text eol=lf
+*.vsixmanifest text eol=lf
+*.vsct text eol=lf
+
+# JSON files
+*.json text eol=lf
+
+# YAML files
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Markdown files
+*.md text eol=lf
+
+# Shell scripts
+*.sh text eol=lf
+
+# Batch files
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# PowerShell scripts
+*.ps1 text eol=crlf
+
+# Binary files
+*.dll binary
+*.exe binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.mov binary
+*.mp4 binary
+*.mp3 binary
+*.flv binary
+*.fla binary
+*.swf binary
+*.gz binary
+*.zip binary
+*.7z binary
+*.ttf binary
+*.eot binary
+*.woff binary
+*.woff2 binary
+*.pyc binary
+*.pdf binary
+*.ez binary
+*.bz2 binary
+*.swp binary
+*.cache binary
+
+# Data files
+*.tsv text eol=lf
+*.csv text eol=lf

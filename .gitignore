@@ -1,0 +1,115 @@
+# Secrets
+# NOTE: Ignore specific files, NOT the directory, so .example files can be tracked
+.secrets/*
+!.secrets/*.example
+.env
+secrets.json
+.env.local
+
+
+# .NET specific
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+.vs/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.sh
+
+# WebUI Frontend
+node_modules/
+**/wwwroot/dist/
+**/wwwroot/node_modules/
+yarn.lock
+# Note: package-lock.json is committed for reproducible builds via 'npm ci'
+# Note: *.js.map (source maps) are committed for debugging support
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio cache/options
+.vs/
+# .vscode/ managed above (line 16-22) with specific exceptions
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Rider
+.idea/
+*.sln.iml
+
+# User-specific files (MonoDevelop/Xamarin Studio)
+*.userprefs
+
+# Build results (comprehensive patterns)
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# NuGet Packages
+*.nupkg
+*.snupkg
+**/packages/*
+!**/packages/build/
+*.nuget.props
+*.nuget.targets
+
+# Test Results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+TestResults/
+test-results/
+*.trx
+*.coverage
+*.coveragexml
+
+# Publish output
+publish/
+PublishProfiles/
+
+# Cache and temp files
+*.cache
+*.log
+*.tmp
+*~
+
+# OS specific
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Local configuration
+appsettings.Local.json
+
+# Scratch and temporary files
+_scratch/
