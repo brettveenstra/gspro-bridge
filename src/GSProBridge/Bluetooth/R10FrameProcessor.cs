@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using LaunchMonitor.Proto;
 using Microsoft.Extensions.Logging;
 
@@ -11,6 +12,7 @@ public class R10FrameProcessor
     private readonly ILogger _logger;
     private readonly List<byte> _currentFrame = new();
     private bool _handshakeComplete;
+    private readonly Stopwatch _timeSinceLastMessage = Stopwatch.StartNew();
 
     /// <summary>
     /// Event raised when a complete WrapperProto message is received
@@ -37,7 +39,11 @@ public class R10FrameProcessor
             return;
         }
 
-        _logger.LogDebug("RX chunk ({Length} bytes): {Hex}", chunk.Length, R10Protocol.ToHexString(chunk));
+        long timeSinceLastMs = _timeSinceLastMessage.ElapsedMilliseconds;
+        _timeSinceLastMessage.Restart();
+
+        _logger.LogDebug("RX chunk ({Length} bytes, {TimeSince}ms since last): {Hex}",
+            chunk.Length, timeSinceLastMs, R10Protocol.ToHexString(chunk));
 
         // First byte is header (used in handshake)
         byte header = chunk[0];
@@ -149,6 +155,9 @@ public class R10FrameProcessor
 
                 _logger.LogDebug("Protobuf parsed successfully");
 
+                // Log detailed wrapper contents (verbose mode)
+                LogWrapperDetails(wrapper);
+
                 // Raise event
                 MessageReceived?.Invoke(this, wrapper);
             }
@@ -161,5 +170,85 @@ public class R10FrameProcessor
         {
             _logger.LogError(ex, "Error processing frame");
         }
+    }
+
+    /// <summary>
+    /// Logs detailed contents of WrapperProto message for verbose debugging
+    /// </summary>
+    /// <param name="wrapper">Parsed WrapperProto message</param>
+    private void LogWrapperDetails(WrapperProto wrapper)
+    {
+        _logger.LogDebug("=== WrapperProto Message Details ===");
+
+        // Service field (responses to our commands)
+        if (wrapper.Service != null)
+        {
+            _logger.LogDebug("  Service field present:");
+
+            if (wrapper.Service.WakeUpResponse != null)
+            {
+                _logger.LogDebug("    - WakeUpResponse: Status={Status}", wrapper.Service.WakeUpResponse.Status);
+            }
+
+            // Log any other service responses we discover
+            _logger.LogDebug("    - Service wrapper present (check protobuf for other response types)");
+        }
+
+        // Event field (notifications, alerts, state changes)
+        if (wrapper.Event != null)
+        {
+            _logger.LogDebug("  Event field present:");
+
+            if (wrapper.Event.SubscribeRespose != null)
+            {
+                _logger.LogDebug("    - SubscribeResponse: (subscription confirmed)");
+            }
+
+            if (wrapper.Event.Notification != null)
+            {
+                _logger.LogDebug("    - Notification field present:");
+
+                if (wrapper.Event.Notification.AlertNotification_ != null)
+                {
+                    AlertDetails alert = wrapper.Event.Notification.AlertNotification_;
+                    _logger.LogDebug("      - AlertNotification:");
+
+                    // Metrics (shot data)
+                    if (alert.Metrics != null)
+                    {
+                        _logger.LogDebug("        - SHOT DATA! Shot ID: {ShotId}", alert.Metrics.ShotId);
+
+                        if (alert.Metrics.BallMetrics != null)
+                        {
+                            BallMetrics ball = alert.Metrics.BallMetrics;
+                            _logger.LogDebug("          Ball: Speed={Speed:F2} m/s, Launch={LaunchAngle:F1}°, Direction={LaunchDirection:F1}°, Spin={TotalSpin:F0} RPM",
+                                ball.BallSpeed, ball.LaunchAngle, ball.LaunchDirection, ball.TotalSpin);
+                        }
+
+                        if (alert.Metrics.ClubMetrics != null)
+                        {
+                            ClubMetrics club = alert.Metrics.ClubMetrics;
+                            _logger.LogDebug("          Club: Speed={Speed:F2} m/s, Path={Path:F1}°, Face={Face:F1}°, Attack={Attack:F1}°",
+                                club.ClubHeadSpeed, club.ClubAnglePath, club.ClubAngleFace, club.AttackAngle);
+                        }
+                    }
+
+                    // State changes
+                    if (alert.State != null)
+                    {
+                        _logger.LogDebug("        - State change: {State}", alert.State.State_);
+                    }
+
+                    // Errors
+                    if (alert.Error != null)
+                    {
+                        _logger.LogWarning("        - ERROR from R10: Code={Code}, Severity={Severity}",
+                            alert.Error.Code, alert.Error.Severity);
+                    }
+                }
+            }
+        }
+
+        _logger.LogDebug("=== End WrapperProto Details ===");
     }
 }

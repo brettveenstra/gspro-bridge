@@ -183,23 +183,27 @@ public class R10BluetoothService : IR10BluetoothService
         cancellationToken.ThrowIfCancellationRequested();
 
         // Get device interface service (for sending commands and receiving responses)
+        _logger.LogDebug("Getting device interface service ({ServiceUuid})...", _deviceInterfaceServiceUuid);
         GattService deviceInterfaceService = await _device!.Gatt.GetPrimaryServiceAsync(_deviceInterfaceServiceUuid)
             ?? throw new InvalidOperationException("Failed to get device interface service");
+        _logger.LogDebug("Device interface service acquired");
 
         cancellationToken.ThrowIfCancellationRequested();
 
         // Get writer characteristic (for sending commands to R10)
+        _logger.LogDebug("Getting writer characteristic ({CharUuid})...", _deviceInterfaceWriterUuid);
         _writerCharacteristic = await deviceInterfaceService.GetCharacteristicAsync(_deviceInterfaceWriterUuid);
         if (_writerCharacteristic == null)
         {
             throw new InvalidOperationException("Failed to get writer characteristic");
         }
 
-        _logger.LogDebug("Got writer characteristic for sending commands");
+        _logger.LogDebug("Writer characteristic acquired - commands can now be sent to R10");
 
         cancellationToken.ThrowIfCancellationRequested();
 
         // Get notifier characteristic (for receiving command responses from R10)
+        _logger.LogDebug("Getting notifier characteristic ({CharUuid})...", _deviceInterfaceNotifierUuid);
         _notifierCharacteristic = await deviceInterfaceService.GetCharacteristicAsync(_deviceInterfaceNotifierUuid);
         if (_notifierCharacteristic == null)
         {
@@ -207,20 +211,24 @@ public class R10BluetoothService : IR10BluetoothService
         }
 
         // Subscribe to command response notifications
+        _logger.LogDebug("Subscribing to command response notifications...");
         _notifierCharacteristic.CharacteristicValueChanged += OnCharacteristicValueChanged;
         await _notifierCharacteristic.StartNotificationsAsync();
 
-        _logger.LogDebug("Subscribed to R10 command response notifications");
+        _logger.LogDebug("Command response notifications ACTIVE - will receive R10 command acknowledgments");
 
         cancellationToken.ThrowIfCancellationRequested();
 
         // Get measurement service (for receiving shot data)
+        _logger.LogDebug("Getting measurement service ({ServiceUuid})...", _measurementServiceUuid);
         GattService measService = await _device.Gatt.GetPrimaryServiceAsync(_measurementServiceUuid)
             ?? throw new InvalidOperationException("Failed to get measurement service");
+        _logger.LogDebug("Measurement service acquired");
 
         cancellationToken.ThrowIfCancellationRequested();
 
         // Get measurement characteristic (for receiving shot data from R10)
+        _logger.LogDebug("Getting measurement characteristic ({CharUuid})...", _measurementCharacteristicUuid);
         _measurementCharacteristic = await measService.GetCharacteristicAsync(_measurementCharacteristicUuid);
         if (_measurementCharacteristic == null)
         {
@@ -228,10 +236,11 @@ public class R10BluetoothService : IR10BluetoothService
         }
 
         // Subscribe to shot data notifications
+        _logger.LogDebug("Subscribing to shot data notifications...");
         _measurementCharacteristic.CharacteristicValueChanged += OnCharacteristicValueChanged;
         await _measurementCharacteristic.StartNotificationsAsync();
 
-        _logger.LogDebug("Subscribed to R10 shot data notifications");
+        _logger.LogDebug("Shot data notifications ACTIVE - will receive R10 shot metrics and state changes");
 
         // Send activation commands to put R10 into shot detection mode
         await ActivateR10Async(cancellationToken);
@@ -335,7 +344,7 @@ public class R10BluetoothService : IR10BluetoothService
 
                 if (alertDetails.Metrics != null)
                 {
-                    _logger.LogInformation("Shot data received! Shot ID: {ShotId}", alertDetails.Metrics.ShotId);
+                    _logger.LogInformation("SHOT DETECTED! Shot ID: {ShotId}", alertDetails.Metrics.ShotId);
 
                     // Raise event with shot data
                     ShotDataReceived?.Invoke(this, alertDetails.Metrics);
@@ -344,13 +353,13 @@ public class R10BluetoothService : IR10BluetoothService
                 // Log state changes
                 if (alertDetails.State != null)
                 {
-                    _logger.LogDebug("R10 state: {State}", alertDetails.State.State_);
+                    _logger.LogInformation("R10 State Change: {State}", alertDetails.State.State_);
                 }
 
                 // Log errors
                 if (alertDetails.Error != null)
                 {
-                    _logger.LogWarning("R10 error: {ErrorCode} ({Severity})",
+                    _logger.LogWarning("R10 Error: Code={ErrorCode}, Severity={Severity}",
                         alertDetails.Error.Code,
                         alertDetails.Error.Severity);
                 }
@@ -361,13 +370,13 @@ public class R10BluetoothService : IR10BluetoothService
             {
                 if (wrapper.Service.WakeUpResponse != null)
                 {
-                    _logger.LogInformation("R10 WakeUp response: {Status}", wrapper.Service.WakeUpResponse.Status);
+                    _logger.LogInformation("R10 WakeUp acknowledged (Status: {Status})", wrapper.Service.WakeUpResponse.Status);
                 }
+            }
 
-                if (wrapper.Event?.SubscribeRespose != null)
-                {
-                    _logger.LogInformation("R10 Subscribe response received");
-                }
+            if (wrapper.Event?.SubscribeRespose != null)
+            {
+                _logger.LogInformation("R10 Subscribe acknowledged - shot detection should be active");
             }
         }
         catch (Exception ex)
