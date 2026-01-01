@@ -37,8 +37,8 @@ static IHostBuilder CreateHostBuilder(string[] args)
             // Explicitly specify assemblies for single-file publish compatibility
             // Use extension method types which are public
             var readerOptions = new ConfigurationReaderOptions(
-                typeof(Serilog.ConsoleLoggerConfigurationExtensions).Assembly,  // Serilog.Sinks.Console
-                typeof(Serilog.FileLoggerConfigurationExtensions).Assembly      // Serilog.Sinks.File
+                typeof(ConsoleLoggerConfigurationExtensions).Assembly,  // Serilog.Sinks.Console
+                typeof(FileLoggerConfigurationExtensions).Assembly      // Serilog.Sinks.File
             );
 
             _ = configuration
