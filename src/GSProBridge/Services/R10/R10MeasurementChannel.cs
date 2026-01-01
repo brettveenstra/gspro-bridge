@@ -4,7 +4,8 @@ namespace GSProBridge.Services.R10;
 /// R10 measurement service channel for receiving shot notification data from the Garmin R10 launch monitor.
 /// Provides events for shot data, device state changes, and errors.
 /// </summary>
-#pragma warning disable CA1812 // Class is instantiated via dependency injection (WIP: not yet wired up)
+#pragma warning disable CA1812 // Class is instantiated via dependency injection
+#pragma warning disable CS0067 // Events not yet used
 internal class R10MeasurementChannel
 {
     /// <summary>

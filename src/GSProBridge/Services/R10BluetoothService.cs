@@ -10,7 +10,7 @@ namespace GSProBridge.Services;
 /// </summary>
 public class R10BluetoothService : IR10BluetoothService
 {
-    // R10 BLE Service UUIDs (reverse-engineered from Garmin Golf app)
+    // R10 BLE Service UUIDs
     private static readonly Guid _measurementServiceUuid = Guid.Parse("6A4E3400-667B-11E3-949A-0800200C9A66");
     private static readonly Guid _controlPointCharacteristicUuid = Guid.Parse("6A4E3402-667B-11E3-949A-0800200C9A66");
 
