@@ -13,6 +13,7 @@ public class R10FrameProcessor
     private readonly List<byte> _currentFrame = new();
     private bool _handshakeComplete;
     private readonly Stopwatch _timeSinceLastMessage = Stopwatch.StartNew();
+    private bool _currentFrameIsCobsEncoded;
 
     /// <summary>
     /// Event raised when a complete WrapperProto message is received
@@ -81,7 +82,7 @@ public class R10FrameProcessor
         if (frameStart && _currentFrame.Count > 0)
         {
             _logger.LogDebug("New frame starting - processing accumulated {Length} bytes first", _currentFrame.Count);
-            ProcessCompleteFrame(_currentFrame.ToArray());
+            ProcessCompleteFrame(_currentFrame.ToArray(), _currentFrameIsCobsEncoded);
             _currentFrame.Clear();
         }
 
@@ -89,38 +90,49 @@ public class R10FrameProcessor
         if (frameStart)
         {
             _currentFrame.Clear();
+            _currentFrameIsCobsEncoded = true; // Frames with delimiters are COBS-encoded
         }
 
         // Accumulate frame bytes
         _currentFrame.AddRange(payload);
 
-        // Process complete frame when delimiter detected
+        // Process complete frame when delimiter detected (COBS-encoded multi-chunk)
         if (frameEnd && _currentFrame.Count > 0)
         {
-            ProcessCompleteFrame(_currentFrame.ToArray());
+            ProcessCompleteFrame(_currentFrame.ToArray(), cobsEncoded: true);
             _currentFrame.Clear();
         }
-        // CRITICAL: Also process single-chunk messages without delimiters
+        // CRITICAL: Also process single-chunk messages without delimiters (RAW frames, NOT COBS-encoded)
         // Short responses (like WakeUp/Subscribe ACKs) fit in one chunk and lack 0x00 delimiters
         else if (!frameStart && !frameEnd && chunk.Length < 19 && _currentFrame.Count > 0)
         {
-            _logger.LogDebug("Short single-chunk message detected ({Length} bytes) - processing immediately", _currentFrame.Count);
-            ProcessCompleteFrame(_currentFrame.ToArray());
+            _logger.LogDebug("Short single-chunk RAW frame detected ({Length} bytes) - processing without COBS decode", _currentFrame.Count);
+            ProcessCompleteFrame(_currentFrame.ToArray(), cobsEncoded: false);
             _currentFrame.Clear();
         }
     }
 
-    private void ProcessCompleteFrame(byte[] encodedFrame)
+    private void ProcessCompleteFrame(byte[] frameData, bool cobsEncoded)
     {
-        _logger.LogDebug("Complete frame received ({Length} bytes COBS-encoded): {Hex}",
-            encodedFrame.Length, R10Protocol.ToHexString(encodedFrame));
+        _logger.LogDebug("Complete frame received ({Length} bytes, COBS-encoded: {IsCobs}): {Hex}",
+            frameData.Length, cobsEncoded, R10Protocol.ToHexString(frameData));
 
         try
         {
-            // COBS decode
-            byte[] decodedFrame = CobsEncoding.Decode(encodedFrame).ToArray();
-            _logger.LogDebug("COBS decoded ({Length} bytes): {Hex}",
-                decodedFrame.Length, R10Protocol.ToHexString(decodedFrame));
+            // COBS decode only if frame is COBS-encoded (multi-chunk with delimiters)
+            // Short single-chunk frames are RAW and should NOT be COBS decoded
+            byte[] decodedFrame;
+            if (cobsEncoded)
+            {
+                decodedFrame = CobsEncoding.Decode(frameData).ToArray();
+                _logger.LogDebug("COBS decoded ({Length} bytes): {Hex}",
+                    decodedFrame.Length, R10Protocol.ToHexString(decodedFrame));
+            }
+            else
+            {
+                decodedFrame = frameData; // Already raw, no decode needed
+                _logger.LogDebug("Using RAW frame (no COBS decode needed)");
+            }
 
             if (decodedFrame.Length < 4)
             {
