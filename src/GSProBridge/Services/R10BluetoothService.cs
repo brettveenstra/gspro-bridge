@@ -108,7 +108,7 @@ public class R10BluetoothService : IR10BluetoothService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error connecting to R10");
+            _logger.LogError(ex, "Error connecting to R10: {ErrorMessage}", ex.Message);
             IsConnected = false;
             throw;
         }

@@ -54,8 +54,10 @@ public class R10HostedService : IHostedService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to connect to R10");
-            AnsiConsole.MarkupLine("[red]Failed to connect to R10. See logs for details.[/]");
+            _logger.LogError(ex, "Failed to connect to R10: {ErrorMessage}", ex.Message);
+            AnsiConsole.MarkupLine("[red]Failed to connect to R10[/]");
+            AnsiConsole.MarkupLine("[red]Error: {0}[/]", ex.Message.EscapeMarkup());
+            AnsiConsole.MarkupLine("[dim]See logs for full details[/]");
             _appLifetime.StopApplication();
         }
     }
