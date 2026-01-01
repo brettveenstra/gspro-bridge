@@ -2,6 +2,7 @@ using Google.Protobuf;
 using InTheHand.Bluetooth;
 using LaunchMonitor.Proto;
 using Microsoft.Extensions.Logging;
+using BluetoothProtocol = GSProBridge.Bluetooth;
 
 namespace GSProBridge.Services;
 
@@ -15,6 +16,7 @@ public class R10BluetoothService : IR10BluetoothService
     private static readonly Guid _controlPointCharacteristicUuid = Guid.Parse("6A4E3402-667B-11E3-949A-0800200C9A66");
 
     private readonly ILogger<R10BluetoothService> _logger;
+    private readonly BluetoothProtocol.R10FrameProcessor _frameProcessor;
     private BluetoothDevice? _device;
     private GattCharacteristic? _controlPointCharacteristic;
     private bool _isConnected;
@@ -55,6 +57,8 @@ public class R10BluetoothService : IR10BluetoothService
     public R10BluetoothService(ILogger<R10BluetoothService> logger)
     {
         _logger = logger;
+        _frameProcessor = new BluetoothProtocol.R10FrameProcessor(logger);
+        _frameProcessor.MessageReceived += OnFrameProcessorMessageReceived;
     }
 
     /// <summary>
@@ -141,7 +145,7 @@ public class R10BluetoothService : IR10BluetoothService
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        IReadOnlyCollection<BluetoothDevice> pairedDevices = await Bluetooth.GetPairedDevicesAsync();
+        IReadOnlyCollection<BluetoothDevice> pairedDevices = await InTheHand.Bluetooth.Bluetooth.GetPairedDevicesAsync();
 
         foreach (BluetoothDevice device in pairedDevices)
         {
@@ -203,9 +207,7 @@ public class R10BluetoothService : IR10BluetoothService
             }
         };
 
-        byte[] wakeUpBytes = wakeUpRequest.ToByteArray();
-        await _controlPointCharacteristic!.WriteValueWithResponseAsync(wakeUpBytes);
-
+        await SendProtobufMessageAsync(wakeUpRequest, cancellationToken);
         _logger.LogDebug("Sent WakeUp request to R10");
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -222,19 +224,65 @@ public class R10BluetoothService : IR10BluetoothService
             }
         };
 
-        byte[] subscribeBytes = subscribeRequest.ToByteArray();
-        await _controlPointCharacteristic.WriteValueWithResponseAsync(subscribeBytes);
-
+        await SendProtobufMessageAsync(subscribeRequest, cancellationToken);
         _logger.LogInformation("Sent SubscribeRequest - R10 should now be in shot detection mode (GREEN LED)");
+    }
+
+    /// <summary>
+    /// Sends a protobuf message to R10 using proper protocol framing and chunking
+    /// </summary>
+    /// <param name="message">Protobuf message to send</param>
+    /// <param name="cancellationToken">Cancellation token</param>
+    private async Task SendProtobufMessageAsync(IMessage message, CancellationToken cancellationToken)
+    {
+        // Frame and chunk the message using R10 protocol
+        List<byte[]> chunks = BluetoothProtocol.R10Protocol.FrameAndChunkMessage(message);
+
+        _logger.LogDebug("Sending protobuf message in {ChunkCount} chunks", chunks.Count);
+
+        // Send each chunk sequentially
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            byte[] chunk = chunks[i];
+            _logger.LogDebug("Sending chunk {ChunkIndex}/{ChunkCount}: {ChunkHex}",
+                i + 1, chunks.Count, BluetoothProtocol.R10Protocol.ToHexString(chunk));
+
+            await _controlPointCharacteristic!.WriteValueWithResponseAsync(chunk);
+
+            // Small delay between chunks to avoid overwhelming the R10
+            if (i < chunks.Count - 1)
+            {
+                await Task.Delay(10, cancellationToken);
+            }
+        }
+
+        _logger.LogDebug("Successfully sent all {ChunkCount} chunks", chunks.Count);
     }
 
     private void OnCharacteristicValueChanged(object? sender, GattCharacteristicValueChangedEventArgs e)
     {
         try
         {
-            // Parse protobuf message
-            WrapperProto wrapper = WrapperProto.Parser.ParseFrom(e.Value);
+            if (e.Value == null || e.Value.Length == 0)
+            {
+                return;
+            }
 
+            // Pass chunk to frame processor for accumulation, decoding, and parsing
+            _frameProcessor.ProcessChunk(e.Value);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error processing R10 BLE chunk");
+        }
+    }
+
+    private void OnFrameProcessorMessageReceived(object? sender, WrapperProto wrapper)
+    {
+        try
+        {
             // Check if this is a shot data notification
             if (wrapper.Event?.Notification?.AlertNotification_ != null)
             {
@@ -262,10 +310,24 @@ public class R10BluetoothService : IR10BluetoothService
                         alertDetails.Error.Severity);
                 }
             }
+
+            // Check if this is a response to our commands (WakeUp, Subscribe)
+            if (wrapper.Service != null)
+            {
+                if (wrapper.Service.WakeUpResponse != null)
+                {
+                    _logger.LogInformation("R10 WakeUp response: {Status}", wrapper.Service.WakeUpResponse.Status);
+                }
+
+                if (wrapper.Event?.SubscribeRespose != null)
+                {
+                    _logger.LogInformation("R10 Subscribe response received");
+                }
+            }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error parsing R10 protobuf message");
+            _logger.LogError(ex, "Error processing R10 message");
         }
     }
 }
