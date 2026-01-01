@@ -12,13 +12,19 @@ namespace GSProBridge.Services;
 public class R10BluetoothService : IR10BluetoothService
 {
     // R10 BLE Service UUIDs
+    private static readonly Guid _deviceInterfaceServiceUuid = Guid.Parse("6A4E2800-667B-11E3-949A-0800200C9A66");
+    private static readonly Guid _deviceInterfaceWriterUuid = Guid.Parse("6A4E2822-667B-11E3-949A-0800200C9A66");
+    private static readonly Guid _deviceInterfaceNotifierUuid = Guid.Parse("6A4E2812-667B-11E3-949A-0800200C9A66");
+
     private static readonly Guid _measurementServiceUuid = Guid.Parse("6A4E3400-667B-11E3-949A-0800200C9A66");
-    private static readonly Guid _controlPointCharacteristicUuid = Guid.Parse("6A4E3402-667B-11E3-949A-0800200C9A66");
+    private static readonly Guid _measurementCharacteristicUuid = Guid.Parse("6A4E3402-667B-11E3-949A-0800200C9A66");
 
     private readonly ILogger<R10BluetoothService> _logger;
     private readonly BluetoothProtocol.R10FrameProcessor _frameProcessor;
     private BluetoothDevice? _device;
-    private GattCharacteristic? _controlPointCharacteristic;
+    private GattCharacteristic? _writerCharacteristic;
+    private GattCharacteristic? _notifierCharacteristic;
+    private GattCharacteristic? _measurementCharacteristic;
     private bool _isConnected;
 
     /// <summary>
@@ -122,14 +128,22 @@ public class R10BluetoothService : IR10BluetoothService
     {
         try
         {
-            if (_controlPointCharacteristic != null)
+            if (_notifierCharacteristic != null)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await _controlPointCharacteristic.StopNotificationsAsync();
+                await _notifierCharacteristic.StopNotificationsAsync();
+            }
+
+            if (_measurementCharacteristic != null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await _measurementCharacteristic.StopNotificationsAsync();
             }
 
             _device = null;
-            _controlPointCharacteristic = null;
+            _writerCharacteristic = null;
+            _notifierCharacteristic = null;
+            _measurementCharacteristic = null;
             IsConnected = false;
 
             _logger.LogInformation("Disconnected from R10");
@@ -168,25 +182,56 @@ public class R10BluetoothService : IR10BluetoothService
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Get measurement service
-        GattService measService = await _device!.Gatt.GetPrimaryServiceAsync(_measurementServiceUuid) ?? throw new InvalidOperationException("Failed to get measurement service");
+        // Get device interface service (for sending commands and receiving responses)
+        GattService deviceInterfaceService = await _device!.Gatt.GetPrimaryServiceAsync(_deviceInterfaceServiceUuid)
+            ?? throw new InvalidOperationException("Failed to get device interface service");
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Get control point characteristic (this is where protobuf messages arrive)
-        _controlPointCharacteristic = await measService.GetCharacteristicAsync(_controlPointCharacteristicUuid);
-        if (_controlPointCharacteristic == null)
+        // Get writer characteristic (for sending commands to R10)
+        _writerCharacteristic = await deviceInterfaceService.GetCharacteristicAsync(_deviceInterfaceWriterUuid);
+        if (_writerCharacteristic == null)
         {
-            throw new InvalidOperationException("Failed to get control point characteristic");
+            throw new InvalidOperationException("Failed to get writer characteristic");
         }
 
+        _logger.LogDebug("Got writer characteristic for sending commands");
+
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Subscribe to notifications
-        _controlPointCharacteristic.CharacteristicValueChanged += OnCharacteristicValueChanged;
-        await _controlPointCharacteristic.StartNotificationsAsync();
+        // Get notifier characteristic (for receiving command responses from R10)
+        _notifierCharacteristic = await deviceInterfaceService.GetCharacteristicAsync(_deviceInterfaceNotifierUuid);
+        if (_notifierCharacteristic == null)
+        {
+            throw new InvalidOperationException("Failed to get notifier characteristic");
+        }
 
-        _logger.LogDebug("Subscribed to R10 notifications");
+        // Subscribe to command response notifications
+        _notifierCharacteristic.CharacteristicValueChanged += OnCharacteristicValueChanged;
+        await _notifierCharacteristic.StartNotificationsAsync();
+
+        _logger.LogDebug("Subscribed to R10 command response notifications");
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Get measurement service (for receiving shot data)
+        GattService measService = await _device.Gatt.GetPrimaryServiceAsync(_measurementServiceUuid)
+            ?? throw new InvalidOperationException("Failed to get measurement service");
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Get measurement characteristic (for receiving shot data from R10)
+        _measurementCharacteristic = await measService.GetCharacteristicAsync(_measurementCharacteristicUuid);
+        if (_measurementCharacteristic == null)
+        {
+            throw new InvalidOperationException("Failed to get measurement characteristic");
+        }
+
+        // Subscribe to shot data notifications
+        _measurementCharacteristic.CharacteristicValueChanged += OnCharacteristicValueChanged;
+        await _measurementCharacteristic.StartNotificationsAsync();
+
+        _logger.LogDebug("Subscribed to R10 shot data notifications");
 
         // Send activation commands to put R10 into shot detection mode
         await ActivateR10Async(cancellationToken);
@@ -249,7 +294,7 @@ public class R10BluetoothService : IR10BluetoothService
             _logger.LogDebug("Sending chunk {ChunkIndex}/{ChunkCount}: {ChunkHex}",
                 i + 1, chunks.Count, BluetoothProtocol.R10Protocol.ToHexString(chunk));
 
-            await _controlPointCharacteristic!.WriteValueWithResponseAsync(chunk);
+            await _writerCharacteristic!.WriteValueWithResponseAsync(chunk);
 
             // Small delay between chunks to avoid overwhelming the R10
             if (i < chunks.Count - 1)
