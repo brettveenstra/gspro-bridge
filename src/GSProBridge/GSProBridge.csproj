@@ -2,11 +2,15 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <RootNamespace>GSProBridge</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>12</LangVersion>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+
+    <!-- Allow building Windows-targeted project from WSL2/Linux -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
 
     <!-- Code quality: warnings as errors -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
