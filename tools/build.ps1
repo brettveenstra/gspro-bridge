@@ -7,29 +7,35 @@
     Builds the GSProBridge solution with configurable options.
     Clone → Run → Done.
 
+    CI/CD FIRST: Tests run by DEFAULT. Build without tests is NOT a successful build.
+
 .PARAMETER Configuration
     Build configuration (Debug or Release). Default: Release
 
 .PARAMETER Clean
     Clean before building
 
-.PARAMETER Test
-    Run tests after build
+.PARAMETER BuildOnly
+    Build only, skip tests (use for fast iteration during development)
 
 .PARAMETER Publish
     Publish self-contained executable after build
 
 .EXAMPLE
     .\build.ps1
-    Build Release configuration
+    Build + Test (CI/CD standard, RECOMMENDED)
 
 .EXAMPLE
-    .\build.ps1 -Configuration Debug -Test
-    Build Debug and run tests
+    .\build.ps1 -Configuration Debug
+    Build + Test in Debug mode
 
 .EXAMPLE
     .\build.ps1 -Clean -Publish
-    Clean, build Release, and publish executable
+    Clean, build, test, and publish executable
+
+.EXAMPLE
+    .\build.ps1 -BuildOnly
+    Build only without tests (fast iteration, NOT validated)
 #>
 
 [CmdletBinding()]
@@ -38,7 +44,7 @@ param(
     [string]$Configuration = 'Release',
 
     [switch]$Clean,
-    [switch]$Test,
+    [switch]$BuildOnly,
     [switch]$Publish
 )
 
@@ -71,8 +77,8 @@ try {
     Write-Host @"
 
 ╔═══════════════════════════════════════════════════════════╗
-║            GSProBridge Build Script                       ║
-║  Clone → Run → Done                                       ║
+║               GSProBridge Build Script                    ║
+║                  Clone → Run → Done                       ║
 ╚═══════════════════════════════════════════════════════════╝
 
 "@ -ForegroundColor Yellow
@@ -125,15 +131,87 @@ try {
     }
     Write-Success "Build completed"
 
-    # Test
-    if ($Test) {
+    # Tests (run on test project directly for cleaner output)
+    $testSummary = ""
+    if (-not $BuildOnly) {
         Write-Step "Running tests"
-        dotnet test $SolutionFile -c $Configuration --no-build
-        if ($LASTEXITCODE -ne 0) {
+
+        # Find test project (assuming single test project for now)
+        $TestProject = Join-Path $RepoRoot "tests/GSProBridge.Tests/GSProBridge.Tests.csproj"
+
+        # Run tests and capture output (normal verbosity needed for test summary parsing)
+        $testOutput = dotnet test $TestProject -c $Configuration --no-build --verbosity normal 2>&1 | Out-String
+        $testExitCode = $LASTEXITCODE
+
+        # Show key test info (discovery count and platform issues only)
+        $testOutput -split "`n" | Where-Object {
+            $_ -match 'NUnit3TestExecutor discovered' -or
+            $_ -match 'Only supported on'
+        } | ForEach-Object { Write-Host $_ }
+
+        if ($testExitCode -ne 0) {
             Write-Failure "Tests failed"
-            exit $LASTEXITCODE
+            Write-Host "`nBuild FAILED: Tests must pass for validated build" -ForegroundColor Red
+            exit $testExitCode
         }
-        Write-Success "Tests passed"
+
+        # Parse test summary from VSTest/NUnit output
+        # Actual format:
+        #   Total tests: 40
+        #        Passed: 40
+        #   Total time: 0.7314 Seconds
+        $totalTests = 0
+        $passedTests = 0
+        $failedTests = 0
+        $testTime = ""
+
+        # Check for platform compatibility issues
+        if ($testOutput -match "Only supported on") {
+            $testSummary = "Skipped (requires Windows - run from Windows PowerShell) ⚠️"
+        }
+        # Parse VSTest format
+        elseif ($testOutput -match 'Total tests:\s*(\d+)') {
+            $totalTests = [int]$matches[1]
+
+            # Extract passed count
+            if ($testOutput -match 'Passed:\s*(\d+)') {
+                $passedTests = [int]$matches[1]
+            }
+
+            # Extract failed count (if present)
+            if ($testOutput -match 'Failed:\s*(\d+)') {
+                $failedTests = [int]$matches[1]
+            }
+
+            # Extract duration
+            if ($testOutput -match 'Total time:\s*([\d.]+)\s*Seconds?') {
+                $testTime = "$([math]::Round([double]$matches[1], 1))s"
+            }
+
+            if ($totalTests -gt 0) {
+                if ($failedTests -gt 0) {
+                    $testSummary = "$passedTests/$totalTests passed, $failedTests FAILED in $testTime ✗"
+                }
+                else {
+                    $testSummary = "$totalTests/$totalTests passed in $testTime ✓"
+                }
+            }
+            else {
+                $testSummary = "No tests executed (check output above)"
+            }
+        }
+        else {
+            # Fallback if parsing failed
+            $testSummary = "Tests completed (check output above)"
+        }
+
+        Write-Success $testSummary
+    }
+    else {
+        Write-Host "`n⚠️  WARNING: Build-only mode (-BuildOnly)" -ForegroundColor Yellow
+        Write-Host "   Tests NOT run. This is NOT a validated build." -ForegroundColor Yellow
+        Write-Host "   Use for fast iteration only, NOT for commits/CI/CD." -ForegroundColor Yellow
+        $testSummary = "NOT RUN (build-only mode) ⚠️"
     }
 
     # Publish
