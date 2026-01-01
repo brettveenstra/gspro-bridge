@@ -1,3 +1,4 @@
+using Google.Protobuf;
 using InTheHand.Bluetooth;
 using LaunchMonitor.Proto;
 using Microsoft.Extensions.Logging;
@@ -182,6 +183,49 @@ public class R10BluetoothService : IR10BluetoothService
         await _controlPointCharacteristic.StartNotificationsAsync();
 
         _logger.LogDebug("Subscribed to R10 notifications");
+
+        // Send activation commands to put R10 into shot detection mode
+        await ActivateR10Async(cancellationToken);
+    }
+
+    private async Task ActivateR10Async(CancellationToken cancellationToken)
+    {
+        _logger.LogDebug("Activating R10 shot detection mode...");
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Send WakeUp request
+        var wakeUpRequest = new WrapperProto
+        {
+            Service = new LaunchMonitorService
+            {
+                WakeUpRequest = new WakeUpRequest()
+            }
+        };
+
+        byte[] wakeUpBytes = wakeUpRequest.ToByteArray();
+        await _controlPointCharacteristic!.WriteValueWithResponseAsync(wakeUpBytes);
+
+        _logger.LogDebug("Sent WakeUp request to R10");
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Send SubscribeRequest to activate shot detection (CRITICAL for GREEN LED)
+        var subscribeRequest = new WrapperProto
+        {
+            Event = new EventSharing
+            {
+                SubscribeRequest = new SubscribeRequest
+                {
+                    Alerts = { new AlertMessage { Type = AlertNotification.Types.AlertType.LaunchMonitor } }
+                }
+            }
+        };
+
+        byte[] subscribeBytes = subscribeRequest.ToByteArray();
+        await _controlPointCharacteristic.WriteValueWithResponseAsync(subscribeBytes);
+
+        _logger.LogInformation("Sent SubscribeRequest - R10 should now be in shot detection mode (GREEN LED)");
     }
 
     private void OnCharacteristicValueChanged(object? sender, GattCharacteristicValueChangedEventArgs e)
