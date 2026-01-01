@@ -2,6 +2,7 @@ using GSProBridge.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
+using Serilog.Settings.Configuration;
 
 // Configure Serilog early (before Host build)
 Log.Logger = new LoggerConfiguration()
@@ -33,8 +34,15 @@ static IHostBuilder CreateHostBuilder(string[] args)
     return Host.CreateDefaultBuilder(args)
         .UseSerilog((context, services, configuration) =>
         {
+            // Explicitly specify assemblies for single-file publish compatibility
+            // Use extension method types which are public
+            var readerOptions = new ConfigurationReaderOptions(
+                typeof(Serilog.ConsoleLoggerConfigurationExtensions).Assembly,  // Serilog.Sinks.Console
+                typeof(Serilog.FileLoggerConfigurationExtensions).Assembly      // Serilog.Sinks.File
+            );
+
             _ = configuration
-                .ReadFrom.Configuration(context.Configuration)
+                .ReadFrom.Configuration(context.Configuration, readerOptions)
                 .ReadFrom.Services(services)
                 .Enrich.FromLogContext();
         })
