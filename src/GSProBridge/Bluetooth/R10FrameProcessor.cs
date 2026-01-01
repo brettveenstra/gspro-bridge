@@ -77,6 +77,14 @@ public class R10FrameProcessor
             _logger.LogDebug("Frame END detected");
         }
 
+        // If starting new frame and we have accumulated data, process it first
+        if (frameStart && _currentFrame.Count > 0)
+        {
+            _logger.LogDebug("New frame starting - processing accumulated {Length} bytes first", _currentFrame.Count);
+            ProcessCompleteFrame(_currentFrame.ToArray());
+            _currentFrame.Clear();
+        }
+
         // Start new frame
         if (frameStart)
         {
@@ -86,9 +94,17 @@ public class R10FrameProcessor
         // Accumulate frame bytes
         _currentFrame.AddRange(payload);
 
-        // Process complete frame
+        // Process complete frame when delimiter detected
         if (frameEnd && _currentFrame.Count > 0)
         {
+            ProcessCompleteFrame(_currentFrame.ToArray());
+            _currentFrame.Clear();
+        }
+        // CRITICAL: Also process single-chunk messages without delimiters
+        // Short responses (like WakeUp/Subscribe ACKs) fit in one chunk and lack 0x00 delimiters
+        else if (!frameStart && !frameEnd && chunk.Length < 19 && _currentFrame.Count > 0)
+        {
+            _logger.LogDebug("Short single-chunk message detected ({Length} bytes) - processing immediately", _currentFrame.Count);
             ProcessCompleteFrame(_currentFrame.ToArray());
             _currentFrame.Clear();
         }
