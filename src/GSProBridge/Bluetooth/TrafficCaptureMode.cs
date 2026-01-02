@@ -14,6 +14,7 @@ public class TrafficCaptureMode
     private readonly string _outputFilePath;
     private readonly int _durationSeconds;
     private int _chunkCount;
+    private readonly ProtobufResponseCollector _responseCollector = new();
 
     // R10 GATT Service and Characteristics (confirmed via Gadgetbridge + community implementations)
     // DEVICE_INTERFACE service - for WakeUp/Subscribe commands
@@ -124,8 +125,14 @@ public class TrafficCaptureMode
                     StatusRequest = new StatusRequest()
                 }
             };
-            await SendProtobufMessageAsync(txChar, statusRequest, "StatusRequest", cancellationToken);
-            await Task.Delay(1000, cancellationToken); // Wait for StatusResponse
+            WrapperProto? statusResponse = await SendProtobufRequestAsync(txChar, statusRequest, "StatusRequest", cancellationToken);
+
+            if (statusResponse?.Service?.StatusResponse != null)
+            {
+                LaunchMonitor.Proto.State.Types.StateType state = statusResponse.Service.StatusResponse.State.State_;
+                _logger.LogInformation("R10 State: {State}", state);
+                File.AppendAllText(_outputFilePath, $"# R10 State: {state}{Environment.NewLine}");
+            }
 
             // Phase 4.6: Send TiltRequest to get device tilt calibration info
             _logger.LogInformation("Sending TiltRequest to get device tilt calibration...");
@@ -136,8 +143,14 @@ public class TrafficCaptureMode
                     TiltRequest = new TiltRequest()
                 }
             };
-            await SendProtobufMessageAsync(txChar, tiltRequest, "TiltRequest", cancellationToken);
-            await Task.Delay(1000, cancellationToken); // Wait for TiltResponse
+            WrapperProto? tiltResponse = await SendProtobufRequestAsync(txChar, tiltRequest, "TiltRequest", cancellationToken);
+
+            if (tiltResponse?.Service?.TiltResponse?.Tilt != null)
+            {
+                Tilt tilt = tiltResponse.Service.TiltResponse.Tilt;
+                _logger.LogInformation("R10 Tilt: Roll={Roll}°, Pitch={Pitch}°", tilt.Roll, tilt.Pitch);
+                File.AppendAllText(_outputFilePath, $"# R10 Tilt: Roll={tilt.Roll}°, Pitch={tilt.Pitch}°{Environment.NewLine}");
+            }
 
             // Phase 5: Send Subscribe command
             _logger.LogInformation("Sending Subscribe command...");
@@ -277,6 +290,35 @@ public class TrafficCaptureMode
         }
     }
 
+    private async Task<WrapperProto?> SendProtobufRequestAsync(GattCharacteristic txChar, IMessage message, string commandName, CancellationToken cancellationToken)
+    {
+        // Clear any buffered responses before sending new request
+        _responseCollector.Clear();
+
+        // Send the request
+        await SendProtobufMessageAsync(txChar, message, commandName, cancellationToken);
+
+        // Wait for response (timeout after 5 seconds)
+        WrapperProto? response = await _responseCollector.WaitForResponseAsync(TimeSpan.FromSeconds(5), cancellationToken);
+
+        if (response != null)
+        {
+            string timestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
+            string logLine = $"[{timestamp}] ← {commandName} Response: {response.GetType().Name}";
+            File.AppendAllText(_outputFilePath, logLine + Environment.NewLine);
+            _logger.LogInformation(logLine);
+        }
+        else
+        {
+            string timestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
+            string logLine = $"[{timestamp}] ⚠ {commandName} Response: TIMEOUT (no response received)";
+            File.AppendAllText(_outputFilePath, logLine + Environment.NewLine);
+            _logger.LogWarning(logLine);
+        }
+
+        return response;
+    }
+
     private void OnChunkReceived(object? sender, GattCharacteristicValueChangedEventArgs e)
     {
         byte[]? chunk = e.Value;
@@ -295,6 +337,9 @@ public class TrafficCaptureMode
         // Write to file AND console
         File.AppendAllText(_outputFilePath, logLine + Environment.NewLine);
         _logger.LogInformation(logLine);
+
+        // Feed chunk to response collector for protobuf parsing
+        _responseCollector.OnChunkReceived(chunk);
     }
 
     private void InitializeOutputFile()
