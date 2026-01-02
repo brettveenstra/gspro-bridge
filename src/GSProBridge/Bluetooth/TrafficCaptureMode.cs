@@ -16,9 +16,15 @@ public class TrafficCaptureMode
     private int _chunkCount;
 
     // R10 GATT Service and Characteristics (confirmed via Gadgetbridge + community implementations)
+    // DEVICE_INTERFACE service - for WakeUp/Subscribe commands
     private static readonly Guid _deviceInterfaceService = Guid.Parse("6A4E2800-667B-11E3-949A-0800200C9A66");
     private static readonly Guid _rxCharacteristic = Guid.Parse("6A4E2812-667B-11E3-949A-0800200C9A66"); // R10 → PC (notifications)
     private static readonly Guid _txCharacteristic = Guid.Parse("6A4E2822-667B-11E3-949A-0800200C9A66"); // PC → R10 (write)
+
+    // MEASUREMENT service - for shot data and status
+    private static readonly Guid _measurementService = Guid.Parse("6A4E3400-667B-11E3-949A-0800200C9A66");
+    private static readonly Guid _measurementCharacteristic = Guid.Parse("6A4E3401-667B-11E3-949A-0800200C9A66"); // Shot data
+    private static readonly Guid _statusCharacteristic = Guid.Parse("6A4E3403-667B-11E3-949A-0800200C9A66"); // Device status
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TrafficCaptureMode"/> class
@@ -118,6 +124,19 @@ public class TrafficCaptureMode
             await SendProtobufMessageAsync(txChar, subscribeRequest, "Subscribe", cancellationToken);
             await Task.Delay(1000, cancellationToken); // Wait for Subscribe response
 
+            // Phase 6: Subscribe to MEASUREMENT service for shot data
+            _logger.LogInformation("Subscribing to MEASUREMENT service for shot data...");
+            GattService measurementService = await r10Device.Gatt.GetPrimaryServiceAsync(_measurementService);
+            GattCharacteristic measurementChar = await measurementService.GetCharacteristicAsync(_measurementCharacteristic);
+            GattCharacteristic statusChar = await measurementService.GetCharacteristicAsync(_statusCharacteristic);
+
+            await measurementChar.StartNotificationsAsync();
+            measurementChar.CharacteristicValueChanged += OnChunkReceived;
+
+            await statusChar.StartNotificationsAsync();
+            statusChar.CharacteristicValueChanged += OnChunkReceived;
+
+            _logger.LogInformation("MEASUREMENT service subscribed (shot data + status)");
             _logger.LogInformation("");
             _logger.LogInformation("Handshake complete. Listening for shot data...");
             _logger.LogInformation("Capturing traffic for {Duration} seconds...", _durationSeconds);
