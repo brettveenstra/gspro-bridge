@@ -1,6 +1,8 @@
+using GSProBridge.Bluetooth;
 using GSProBridge.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Serilog;
 using Serilog.Settings.Configuration;
 
@@ -12,6 +14,38 @@ Log.Logger = new LoggerConfiguration()
 
 try
 {
+    // Check for traffic capture mode: --capture-traffic <output-file> [duration-seconds]
+    if (args.Length >= 2 && args[0] == "--capture-traffic")
+    {
+        string outputFile = args[1];
+        int duration = args.Length >= 3 && int.TryParse(args[2], out int d) ? d : 60;
+
+        Log.Information("Traffic Capture Mode");
+
+        // Build minimal host for DI and logging
+        IHost captureHost = Host.CreateDefaultBuilder(args)
+            .UseSerilog((context, services, configuration) =>
+            {
+                var readerOptions = new ConfigurationReaderOptions(
+                    typeof(ConsoleLoggerConfigurationExtensions).Assembly,
+                    typeof(FileLoggerConfigurationExtensions).Assembly
+                );
+
+                _ = configuration
+                    .ReadFrom.Configuration(context.Configuration, readerOptions)
+                    .ReadFrom.Services(services)
+                    .Enrich.FromLogContext();
+            })
+            .Build();
+
+        ILogger<TrafficCaptureMode> logger = captureHost.Services.GetRequiredService<ILogger<TrafficCaptureMode>>();
+        TrafficCaptureMode captureMode = new(logger, outputFile, duration);
+
+        await captureMode.RunAsync();
+        return 0;
+    }
+
+    // Normal mode: start hosted services
     Log.Information("GSProBridge starting up...");
 
     IHost host = CreateHostBuilder(args).Build();
