@@ -14,11 +14,27 @@ Log.Logger = new LoggerConfiguration()
 
 try
 {
-    // Check for traffic capture mode: --capture-traffic <output-file> [duration-seconds]
-    if (args.Length >= 2 && args[0] == "--capture-traffic")
+    // Check for traffic capture mode: --capture-traffic [output-file] [duration-seconds]
+    if (args.Length >= 1 && args[0] == "--capture-traffic")
     {
-        string outputFile = args[1];
-        int duration = args.Length >= 3 && int.TryParse(args[2], out int d) ? d : 60;
+        // Default output file: logs/r10-traffic-capture-{datetime}.log
+        string outputFile;
+        int duration;
+
+        if (args.Length >= 2 && !int.TryParse(args[1], out int _))
+        {
+            // User provided filename
+            outputFile = args[1];
+            duration = args.Length >= 3 && int.TryParse(args[2], out int d) ? d : 60;
+        }
+        else
+        {
+            // Generate default filename
+            _ = Directory.CreateDirectory("logs");
+            string timestamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss");
+            outputFile = Path.Combine("logs", $"r10-traffic-capture-{timestamp}.log");
+            duration = args.Length >= 2 && int.TryParse(args[1], out int d) ? d : 60;
+        }
 
         Log.Information("Traffic Capture Mode");
 
