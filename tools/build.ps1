@@ -139,7 +139,8 @@ try {
         # Find test project (assuming single test project for now)
         $TestProject = Join-Path $RepoRoot "tests/GSProBridge.Tests/GSProBridge.Tests.csproj"
 
-        # Run tests and capture output (normal verbosity needed for test summary parsing)
+        # Run tests - if failures occur, dotnet test writes full output to stdout
+        # Capture everything and show failures when needed
         $testOutput = dotnet test $TestProject -c $Configuration --no-build --verbosity normal 2>&1 | Out-String
         $testExitCode = $LASTEXITCODE
 
@@ -151,6 +152,11 @@ try {
 
         if ($testExitCode -ne 0) {
             Write-Failure "Tests failed"
+
+            # Just show the full test output - all error details are already there
+            Write-Host "`n" # Blank line for readability
+            Write-Host $testOutput -ForegroundColor DarkYellow
+
             Write-Host "`nBuild FAILED: Tests must pass for validated build" -ForegroundColor Red
             exit $testExitCode
         }
