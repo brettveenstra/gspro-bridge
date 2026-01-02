@@ -141,13 +141,37 @@ public class TrafficCaptureMode
             _logger.LogInformation("Handshake complete. Listening for shot data...");
             _logger.LogInformation("Capturing traffic for {Duration} seconds...", _durationSeconds);
             _logger.LogInformation("NOTE: Hit shots on R10 to capture shot data in protocol trace");
+            _logger.LogInformation("NOTE: Sending periodic WakeUp commands to keep R10 active (prevent sleep)");
             _logger.LogInformation("");
 
-            // Phase 6: Capture for specified duration
-            await Task.Delay(TimeSpan.FromSeconds(_durationSeconds), cancellationToken);
+            // Phase 7: Capture for specified duration with periodic keepalive
+            // Send WakeUp every 10 seconds to prevent R10 from going to sleep (BLINKING WHITE)
+            DateTime endTime = DateTime.UtcNow.AddSeconds(_durationSeconds);
+            const int KeepaliveIntervalSeconds = 10;
+
+            while (DateTime.UtcNow < endTime)
+            {
+                TimeSpan remaining = endTime - DateTime.UtcNow;
+                int delaySeconds = Math.Min(KeepaliveIntervalSeconds, (int)remaining.TotalSeconds);
+
+                if (delaySeconds > 0)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
+                }
+
+                // Send WakeUp keepalive if still within capture window
+                if (DateTime.UtcNow < endTime)
+                {
+                    _logger.LogInformation("Sending keepalive WakeUp to maintain R10 active state...");
+                    await SendProtobufMessageAsync(txChar, wakeUpRequest, "WakeUp (keepalive)", cancellationToken);
+                    await Task.Delay(500, cancellationToken); // Brief delay after keepalive
+                }
+            }
 
             // Cleanup
             rxChar.CharacteristicValueChanged -= OnChunkReceived;
+            measurementChar.CharacteristicValueChanged -= OnChunkReceived;
+            statusChar.CharacteristicValueChanged -= OnChunkReceived;
             FinalizeOutputFile();
 
             _logger.LogInformation("");
