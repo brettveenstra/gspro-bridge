@@ -26,6 +26,12 @@ public class TrafficCaptureMode
     private static readonly Guid _measurementCharacteristic = Guid.Parse("6A4E3401-667B-11E3-949A-0800200C9A66"); // Shot data
     private static readonly Guid _statusCharacteristic = Guid.Parse("6A4E3403-667B-11E3-949A-0800200C9A66"); // Device status
 
+    // Standard Bluetooth services (optional - may not be exposed by R10)
+    private static readonly Guid _batteryService = Guid.Parse("0000180F-0000-1000-8000-00805F9B34FB"); // Battery Service
+    private static readonly Guid _batteryLevelCharacteristic = Guid.Parse("00002A19-0000-1000-8000-00805F9B34FB"); // Battery Level
+    private static readonly Guid _deviceInfoService = Guid.Parse("0000180A-0000-1000-8000-00805F9B34FB"); // Device Information
+    private static readonly Guid _firmwareRevisionCharacteristic = Guid.Parse("00002A26-0000-1000-8000-00805F9B34FB"); // Firmware Revision
+
     /// <summary>
     /// Initializes a new instance of the <see cref="TrafficCaptureMode"/> class
     /// </summary>
@@ -109,6 +115,30 @@ public class TrafficCaptureMode
             await SendProtobufMessageAsync(txChar, wakeUpRequest, "WakeUp", cancellationToken);
             await Task.Delay(1000, cancellationToken); // Wait for WakeUp response
 
+            // Phase 4.5: Send StatusRequest to transition R10 to "ready to measure" mode
+            _logger.LogInformation("Sending StatusRequest to query device state and trigger ready mode...");
+            var statusRequest = new WrapperProto
+            {
+                Service = new LaunchMonitorService
+                {
+                    StatusRequest = new StatusRequest()
+                }
+            };
+            await SendProtobufMessageAsync(txChar, statusRequest, "StatusRequest", cancellationToken);
+            await Task.Delay(1000, cancellationToken); // Wait for StatusResponse
+
+            // Phase 4.6: Send TiltRequest to get device tilt calibration info
+            _logger.LogInformation("Sending TiltRequest to get device tilt calibration...");
+            var tiltRequest = new WrapperProto
+            {
+                Service = new LaunchMonitorService
+                {
+                    TiltRequest = new TiltRequest()
+                }
+            };
+            await SendProtobufMessageAsync(txChar, tiltRequest, "TiltRequest", cancellationToken);
+            await Task.Delay(1000, cancellationToken); // Wait for TiltResponse
+
             // Phase 5: Send Subscribe command
             _logger.LogInformation("Sending Subscribe command...");
             var subscribeRequest = new WrapperProto
@@ -138,6 +168,14 @@ public class TrafficCaptureMode
 
             _logger.LogInformation("MEASUREMENT service subscribed (shot data + status)");
             _logger.LogInformation("");
+
+            // Phase 6.5: Attempt to read optional device info (Battery, Firmware)
+            // These are standard Bluetooth services that may or may not be exposed by R10
+            _logger.LogInformation("Querying optional device info (battery, firmware)...");
+            await TryReadBatteryLevelAsync(r10Device);
+            await TryReadFirmwareVersionAsync(r10Device);
+            _logger.LogInformation("");
+
             _logger.LogInformation("Handshake complete. Listening for shot data...");
             _logger.LogInformation("Capturing traffic for {Duration} seconds...", _durationSeconds);
             _logger.LogInformation("NOTE: Hit shots on R10 to capture shot data in protocol trace");
@@ -274,5 +312,51 @@ public class TrafficCaptureMode
     {
         File.AppendAllText(_outputFilePath, Environment.NewLine);
         File.AppendAllText(_outputFilePath, $"# Capture complete: {_chunkCount} chunks{Environment.NewLine}");
+    }
+
+    private async Task TryReadBatteryLevelAsync(BluetoothDevice device)
+    {
+        try
+        {
+            GattService batteryService = await device.Gatt.GetPrimaryServiceAsync(_batteryService);
+            GattCharacteristic batteryChar = await batteryService.GetCharacteristicAsync(_batteryLevelCharacteristic);
+            byte[]? batteryData = await batteryChar.ReadValueAsync();
+
+            if (batteryData != null && batteryData.Length > 0)
+            {
+                int batteryLevel = batteryData[0]; // Battery level is 0-100%
+                string logLine = $"Battery Level: {batteryLevel}%";
+                _logger.LogInformation(logLine);
+                File.AppendAllText(_outputFilePath, $"# {logLine}{Environment.NewLine}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Battery service not available: {Message}", ex.Message);
+            File.AppendAllText(_outputFilePath, $"# Battery service: Not available{Environment.NewLine}");
+        }
+    }
+
+    private async Task TryReadFirmwareVersionAsync(BluetoothDevice device)
+    {
+        try
+        {
+            GattService deviceInfoService = await device.Gatt.GetPrimaryServiceAsync(_deviceInfoService);
+            GattCharacteristic firmwareChar = await deviceInfoService.GetCharacteristicAsync(_firmwareRevisionCharacteristic);
+            byte[]? firmwareData = await firmwareChar.ReadValueAsync();
+
+            if (firmwareData != null && firmwareData.Length > 0)
+            {
+                string firmwareVersion = System.Text.Encoding.UTF8.GetString(firmwareData);
+                string logLine = $"Firmware Version: {firmwareVersion}";
+                _logger.LogInformation(logLine);
+                File.AppendAllText(_outputFilePath, $"# {logLine}{Environment.NewLine}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Device Information service not available: {Message}", ex.Message);
+            File.AppendAllText(_outputFilePath, $"# Device Information service: Not available{Environment.NewLine}");
+        }
     }
 }
