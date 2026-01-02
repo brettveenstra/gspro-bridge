@@ -1,10 +1,12 @@
+using Google.Protobuf;
 using InTheHand.Bluetooth;
+using LaunchMonitor.Proto;
 using Microsoft.Extensions.Logging;
 
 namespace GSProBridge.Bluetooth;
 
 /// <summary>
-/// Traffic capture mode: passively captures raw R10 Bluetooth chunks to hex file
+/// Traffic capture mode: actively engages R10 with protocol handshake and captures bidirectional traffic
 /// </summary>
 public class TrafficCaptureMode
 {
@@ -16,6 +18,7 @@ public class TrafficCaptureMode
     // R10 GATT Service and Characteristics (confirmed via Gadgetbridge + community implementations)
     private static readonly Guid _deviceInterfaceService = Guid.Parse("6A4E2800-667B-11E3-949A-0800200C9A66");
     private static readonly Guid _rxCharacteristic = Guid.Parse("6A4E2812-667B-11E3-949A-0800200C9A66"); // R10 → PC (notifications)
+    private static readonly Guid _txCharacteristic = Guid.Parse("6A4E2822-667B-11E3-949A-0800200C9A66"); // PC → R10 (write)
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TrafficCaptureMode"/> class
@@ -72,10 +75,11 @@ public class TrafficCaptureMode
             _logger.LogInformation("Connected to R10");
             _logger.LogInformation("");
 
-            // Phase 3: Subscribe to RX characteristic
-            _logger.LogInformation("Subscribing to R10 RX characteristic...");
+            // Phase 3: Get GATT characteristics
+            _logger.LogInformation("Getting GATT characteristics...");
             GattService deviceService = await r10Device.Gatt.GetPrimaryServiceAsync(_deviceInterfaceService);
             GattCharacteristic rxChar = await deviceService.GetCharacteristicAsync(_rxCharacteristic);
+            GattCharacteristic txChar = await deviceService.GetCharacteristicAsync(_txCharacteristic);
 
             // Initialize output file with header
             InitializeOutputFile();
@@ -84,12 +88,43 @@ public class TrafficCaptureMode
             await rxChar.StartNotificationsAsync();
             rxChar.CharacteristicValueChanged += OnChunkReceived;
 
-            _logger.LogInformation("Capturing traffic for {Duration} seconds...", _durationSeconds);
-            _logger.LogInformation("NOTE: R10 will NOT send data unless Garmin Golf app connects to it");
-            _logger.LogInformation("      This tool LISTENS passively - start Garmin Golf app now");
+            _logger.LogInformation("Starting protocol handshake...");
             _logger.LogInformation("");
 
-            // Phase 4: Capture for specified duration
+            // Phase 4: Send WakeUp command
+            _logger.LogInformation("Sending WakeUp command...");
+            var wakeUpRequest = new WrapperProto
+            {
+                Service = new LaunchMonitorService
+                {
+                    WakeUpRequest = new WakeUpRequest()
+                }
+            };
+            await SendProtobufMessageAsync(txChar, wakeUpRequest, "WakeUp", cancellationToken);
+            await Task.Delay(1000, cancellationToken); // Wait for WakeUp response
+
+            // Phase 5: Send Subscribe command
+            _logger.LogInformation("Sending Subscribe command...");
+            var subscribeRequest = new WrapperProto
+            {
+                Event = new EventSharing
+                {
+                    SubscribeRequest = new SubscribeRequest
+                    {
+                        Alerts = { new AlertMessage { Type = AlertNotification.Types.AlertType.LaunchMonitor } }
+                    }
+                }
+            };
+            await SendProtobufMessageAsync(txChar, subscribeRequest, "Subscribe", cancellationToken);
+            await Task.Delay(1000, cancellationToken); // Wait for Subscribe response
+
+            _logger.LogInformation("");
+            _logger.LogInformation("Handshake complete. Listening for shot data...");
+            _logger.LogInformation("Capturing traffic for {Duration} seconds...", _durationSeconds);
+            _logger.LogInformation("NOTE: Hit shots on R10 to capture shot data in protocol trace");
+            _logger.LogInformation("");
+
+            // Phase 6: Capture for specified duration
             await Task.Delay(TimeSpan.FromSeconds(_durationSeconds), cancellationToken);
 
             // Cleanup
@@ -127,6 +162,40 @@ public class TrafficCaptureMode
         return null;
     }
 
+    private async Task SendProtobufMessageAsync(GattCharacteristic txChar, IMessage message, string commandName, CancellationToken cancellationToken)
+    {
+        // Frame and chunk the message using R10 protocol
+        List<byte[]> chunks = R10Protocol.FrameAndChunkMessage(message);
+
+        string timestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
+        string logLine = $"[{timestamp}] TX {commandName} ({chunks.Count} chunks)";
+
+        File.AppendAllText(_outputFilePath, logLine + Environment.NewLine);
+        _logger.LogInformation(logLine);
+
+        // Send and log each chunk
+        for (int i = 0; i < chunks.Count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            byte[] chunk = chunks[i];
+            string chunkTimestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
+            string chunkHex = R10Protocol.ToHexString(chunk);
+            string chunkLog = $"[{chunkTimestamp}]   → Chunk {i + 1}/{chunks.Count} ({chunk.Length} bytes): {chunkHex}";
+
+            File.AppendAllText(_outputFilePath, chunkLog + Environment.NewLine);
+            _logger.LogInformation(chunkLog);
+
+            await txChar.WriteValueWithResponseAsync(chunk);
+
+            // Small delay between chunks
+            if (i < chunks.Count - 1)
+            {
+                await Task.Delay(10, cancellationToken);
+            }
+        }
+    }
+
     private void OnChunkReceived(object? sender, GattCharacteristicValueChangedEventArgs e)
     {
         byte[]? chunk = e.Value;
@@ -140,7 +209,7 @@ public class TrafficCaptureMode
         string timestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
         string hex = R10Protocol.ToHexString(chunk);
 
-        string logLine = $"[{timestamp}] Chunk {_chunkCount:D4} ({chunk.Length} bytes): {hex}";
+        string logLine = $"[{timestamp}] RX Chunk {_chunkCount:D4} ({chunk.Length} bytes): {hex}";
 
         // Write to file AND console
         File.AppendAllText(_outputFilePath, logLine + Environment.NewLine);
@@ -150,9 +219,11 @@ public class TrafficCaptureMode
     private void InitializeOutputFile()
     {
         using StreamWriter writer = new(_outputFilePath, append: false);
-        writer.WriteLine("# R10 Bluetooth Traffic Capture");
+        writer.WriteLine("# R10 Bluetooth Traffic Capture (Bidirectional)");
         writer.WriteLine($"# Captured: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
-        writer.WriteLine("# Format: [timestamp] Chunk #### (length bytes): HEXDATA");
+        writer.WriteLine("# Format: [timestamp] TX/RX [CommandName] (length bytes): HEXDATA");
+        writer.WriteLine("#   TX = PC → R10 (commands sent)");
+        writer.WriteLine("#   RX = R10 → PC (notifications received)");
         writer.WriteLine();
     }
 

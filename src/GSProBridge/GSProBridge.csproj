@@ -12,6 +12,9 @@
     <!-- Allow building Windows-targeted project from WSL2/Linux -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
 
+    <!-- Windows Runtime support (required for InTheHand.BluetoothLE WinRT APIs) -->
+    <UseWindowsDesktop>true</UseWindowsDesktop>
+
     <!-- Code quality: warnings as errors -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
@@ -20,11 +23,15 @@
     <!-- Debug symbols: always generate PDB files (even in Release) -->
     <DebugType>portable</DebugType>
     <DebugSymbols>true</DebugSymbols>
+
+    <!-- Publish settings: preserve WinRT support (fix PlatformNotSupportedException) -->
+    <PublishTrimmed>false</PublishTrimmed>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Bluetooth & Device Integration -->
-    <PackageReference Include="InTheHand.BluetoothLE" Version="4.0.37" />
+    <PackageReference Include="InTheHand.BluetoothLE" Version="4.0.43" />
     <PackageReference Include="Google.Protobuf" Version="3.25.2" />
     <PackageReference Include="Grpc.Tools" Version="2.60.0" PrivateAssets="All" />
 
