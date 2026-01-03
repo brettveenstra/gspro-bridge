@@ -52,10 +52,19 @@ try
                     .ReadFrom.Services(services)
                     .Enrich.FromLogContext();
             })
+            .ConfigureServices((hostContext, services) =>
+            {
+                // Register R10MessageCollector for DI
+                _ = services.AddSingleton<R10MessageCollector>();
+            })
             .Build();
 
+        // Resolve dependencies from DI container (composition root)
         ILogger<TrafficCaptureMode> logger = captureHost.Services.GetRequiredService<ILogger<TrafficCaptureMode>>();
-        TrafficCaptureMode captureMode = new(logger, outputFile, duration);
+        R10MessageCollector messageCollector = captureHost.Services.GetRequiredService<R10MessageCollector>();
+
+        // Create TrafficCaptureMode with injected dependencies + runtime config
+        TrafficCaptureMode captureMode = new(logger, messageCollector, outputFile, duration);
 
         await captureMode.RunAsync();
         return 0;

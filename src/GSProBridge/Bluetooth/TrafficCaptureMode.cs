@@ -14,7 +14,7 @@ public class TrafficCaptureMode
     private readonly string _outputFilePath;
     private readonly int _durationSeconds;
     private int _chunkCount;
-    private readonly ProtobufResponseCollector _responseCollector = new();
+    private readonly R10MessageCollector _messageCollector;
 
     // R10 GATT Service and Characteristics (confirmed via Gadgetbridge + community implementations)
     // DEVICE_INTERFACE service - for WakeUp/Subscribe commands
@@ -37,11 +37,13 @@ public class TrafficCaptureMode
     /// Initializes a new instance of the <see cref="TrafficCaptureMode"/> class
     /// </summary>
     /// <param name="logger">Logger instance</param>
+    /// <param name="messageCollector">Message collector for parsing R10 protocol messages</param>
     /// <param name="outputFilePath">Output file path for captured hex traffic</param>
     /// <param name="durationSeconds">Capture duration in seconds (default 60)</param>
-    public TrafficCaptureMode(ILogger<TrafficCaptureMode> logger, string outputFilePath, int durationSeconds = 60)
+    public TrafficCaptureMode(ILogger<TrafficCaptureMode> logger, R10MessageCollector messageCollector, string outputFilePath, int durationSeconds = 60)
     {
         _logger = logger;
+        _messageCollector = messageCollector;
         _outputFilePath = outputFilePath;
         _durationSeconds = durationSeconds;
     }
@@ -104,7 +106,7 @@ public class TrafficCaptureMode
             _logger.LogInformation("Starting protocol handshake...");
             _logger.LogInformation("");
 
-            // Phase 4: Send WakeUp command
+            // Phase 4: Send WakeUp command (ACK-only, no protobuf response)
             _logger.LogInformation("Sending WakeUp command...");
             var wakeUpRequest = new WrapperProto
             {
@@ -113,11 +115,17 @@ public class TrafficCaptureMode
                     WakeUpRequest = new WakeUpRequest()
                 }
             };
-            await SendProtobufMessageAsync(txChar, wakeUpRequest, "WakeUp", cancellationToken);
-            await Task.Delay(1000, cancellationToken); // Wait for WakeUp response
+            bool wakeUpAck = await SendRequestWithAckAsync(txChar, wakeUpRequest, "WakeUp", cancellationToken);
 
-            // Phase 4.5: Send StatusRequest to transition R10 to "ready to measure" mode
-            _logger.LogInformation("Sending StatusRequest to query device state and trigger ready mode...");
+            if (!wakeUpAck)
+            {
+                _logger.LogWarning("WakeUp not acknowledged - continuing anyway");
+            }
+
+            await Task.Delay(500, cancellationToken); // Brief delay after WakeUp
+
+            // Phase 4.5: Send StatusRequest command (ACK-only, for protocol capture)
+            _logger.LogInformation("Sending StatusRequest for protocol capture...");
             var statusRequest = new WrapperProto
             {
                 Service = new LaunchMonitorService
@@ -125,17 +133,21 @@ public class TrafficCaptureMode
                     StatusRequest = new StatusRequest()
                 }
             };
-            WrapperProto? statusResponse = await SendProtobufRequestAsync(txChar, statusRequest, "StatusRequest", cancellationToken);
+            bool statusAck = await SendRequestWithAckAsync(txChar, statusRequest, "StatusRequest", cancellationToken);
 
-            if (statusResponse?.Service?.StatusResponse != null)
+            if (statusAck)
             {
-                LaunchMonitor.Proto.State.Types.StateType state = statusResponse.Service.StatusResponse.State.State_;
-                _logger.LogInformation("R10 State: {State}", state);
-                File.AppendAllText(_outputFilePath, $"# R10 State: {state}{Environment.NewLine}");
+                File.AppendAllText(_outputFilePath, $"# StatusRequest: ACK received{Environment.NewLine}");
+            }
+            else
+            {
+                File.AppendAllText(_outputFilePath, $"# StatusRequest: timeout (no ACK){Environment.NewLine}");
             }
 
-            // Phase 4.6: Send TiltRequest to get device tilt calibration info
-            _logger.LogInformation("Sending TiltRequest to get device tilt calibration...");
+            await Task.Delay(500, cancellationToken); // Brief delay after StatusRequest
+
+            // Phase 4.6: Send TiltRequest command (ACK-only, for protocol capture)
+            _logger.LogInformation("Sending TiltRequest for protocol capture...");
             var tiltRequest = new WrapperProto
             {
                 Service = new LaunchMonitorService
@@ -143,16 +155,20 @@ public class TrafficCaptureMode
                     TiltRequest = new TiltRequest()
                 }
             };
-            WrapperProto? tiltResponse = await SendProtobufRequestAsync(txChar, tiltRequest, "TiltRequest", cancellationToken);
+            bool tiltAck = await SendRequestWithAckAsync(txChar, tiltRequest, "TiltRequest", cancellationToken);
 
-            if (tiltResponse?.Service?.TiltResponse?.Tilt != null)
+            if (tiltAck)
             {
-                Tilt tilt = tiltResponse.Service.TiltResponse.Tilt;
-                _logger.LogInformation("R10 Tilt: Roll={Roll}°, Pitch={Pitch}°", tilt.Roll, tilt.Pitch);
-                File.AppendAllText(_outputFilePath, $"# R10 Tilt: Roll={tilt.Roll}°, Pitch={tilt.Pitch}°{Environment.NewLine}");
+                File.AppendAllText(_outputFilePath, $"# TiltRequest: ACK received{Environment.NewLine}");
+            }
+            else
+            {
+                File.AppendAllText(_outputFilePath, $"# TiltRequest: timeout (no ACK){Environment.NewLine}");
             }
 
-            // Phase 5: Send Subscribe command
+            await Task.Delay(500, cancellationToken); // Brief delay after TiltRequest
+
+            // Phase 5: Send Subscribe command (ACK + protobuf response)
             _logger.LogInformation("Sending Subscribe command...");
             var subscribeRequest = new WrapperProto
             {
@@ -164,8 +180,19 @@ public class TrafficCaptureMode
                     }
                 }
             };
-            await SendProtobufMessageAsync(txChar, subscribeRequest, "Subscribe", cancellationToken);
-            await Task.Delay(1000, cancellationToken); // Wait for Subscribe response
+            WrapperProto? subscribeResponse = await SendRequestWithResponseAsync(txChar, subscribeRequest, "Subscribe", cancellationToken);
+
+            if (subscribeResponse != null)
+            {
+                _logger.LogInformation("Subscribe response received - R10 should be ready to measure");
+                File.AppendAllText(_outputFilePath, $"# Subscribe Response: {subscribeResponse.GetType().Name}{Environment.NewLine}");
+            }
+            else
+            {
+                _logger.LogWarning("Subscribe response not received - manual R10 button press may be required");
+            }
+
+            await Task.Delay(500, cancellationToken); // Brief delay after Subscribe
 
             // Phase 6: Subscribe to MEASUREMENT service for shot data
             _logger.LogInformation("Subscribing to MEASUREMENT service for shot data...");
@@ -214,7 +241,8 @@ public class TrafficCaptureMode
                 if (DateTime.UtcNow < endTime)
                 {
                     _logger.LogInformation("Sending keepalive WakeUp to maintain R10 active state...");
-                    await SendProtobufMessageAsync(txChar, wakeUpRequest, "WakeUp (keepalive)", cancellationToken);
+                    bool keepaliveAck = await SendRequestWithAckAsync(txChar, wakeUpRequest, "WakeUp (keepalive)", cancellationToken);
+                    _ = keepaliveAck; // Ignore result for keepalive
                     await Task.Delay(500, cancellationToken); // Brief delay after keepalive
                 }
             }
@@ -290,33 +318,83 @@ public class TrafficCaptureMode
         }
     }
 
-    private async Task<WrapperProto?> SendProtobufRequestAsync(GattCharacteristic txChar, IMessage message, string commandName, CancellationToken cancellationToken)
+    /// <summary>
+    /// Send protobuf request and wait for ACK only (no protobuf response expected)
+    /// Used for commands that only return acknowledgment: WakeUp, StatusRequest, TiltRequest
+    /// </summary>
+    private async Task<bool> SendRequestWithAckAsync(GattCharacteristic txChar, IMessage message, string commandName, CancellationToken cancellationToken)
     {
-        // Clear any buffered responses before sending new request
-        _responseCollector.Clear();
+        // Clear any buffered messages before sending new request
+        _messageCollector.Clear();
 
         // Send the request
         await SendProtobufMessageAsync(txChar, message, commandName, cancellationToken);
 
-        // Wait for response (timeout after 5 seconds)
-        WrapperProto? response = await _responseCollector.WaitForResponseAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        // Wait for ACK (1 second timeout)
+        R10Message? ack = await _messageCollector.WaitForMessageAsync(TimeSpan.FromSeconds(1), cancellationToken);
+
+        if (ack?.Type == R10MessageType.Acknowledgment)
+        {
+            string timestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
+            string logLine = $"[{timestamp}] ✓ {commandName} ACK received (counter: {ack.Counter})";
+            File.AppendAllText(_outputFilePath, logLine + Environment.NewLine);
+            _logger.LogInformation(logLine);
+            return true;
+        }
+
+        string timeoutTimestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
+        string timeoutLog = $"[{timeoutTimestamp}] ⚠ {commandName} ACK timeout";
+        File.AppendAllText(_outputFilePath, timeoutLog + Environment.NewLine);
+        _logger.LogWarning(timeoutLog);
+        return false;
+    }
+
+    /// <summary>
+    /// Send protobuf request and wait for ACK + protobuf response
+    /// Used for commands that return both ACK and protobuf data: Subscribe
+    /// </summary>
+    private async Task<WrapperProto?> SendRequestWithResponseAsync(GattCharacteristic txChar, IMessage message, string commandName, CancellationToken cancellationToken)
+    {
+        // Clear any buffered messages before sending new request
+        _messageCollector.Clear();
+
+        // Send the request
+        await SendProtobufMessageAsync(txChar, message, commandName, cancellationToken);
+
+        // Wait for ACK first (1 second timeout)
+        R10Message? ack = await _messageCollector.WaitForMessageAsync(TimeSpan.FromSeconds(1), cancellationToken);
+
+        if (ack?.Type != R10MessageType.Acknowledgment)
+        {
+            string ackTimestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
+            string ackLog = $"[{ackTimestamp}] ⚠ {commandName} ACK timeout";
+            File.AppendAllText(_outputFilePath, ackLog + Environment.NewLine);
+            _logger.LogWarning(ackLog);
+            return null;
+        }
+
+        string ackReceivedTimestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
+        string ackReceivedLog = $"[{ackReceivedTimestamp}] ✓ {commandName} ACK received, waiting for protobuf response...";
+        File.AppendAllText(_outputFilePath, ackReceivedLog + Environment.NewLine);
+        _logger.LogDebug(ackReceivedLog);
+
+        // Wait for protobuf response (5 second timeout)
+        WrapperProto? response = await _messageCollector.WaitForProtobufResponseAsync(TimeSpan.FromSeconds(5), cancellationToken);
 
         if (response != null)
         {
-            string timestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
-            string logLine = $"[{timestamp}] ← {commandName} Response: {response.GetType().Name}";
-            File.AppendAllText(_outputFilePath, logLine + Environment.NewLine);
-            _logger.LogInformation(logLine);
-        }
-        else
-        {
-            string timestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
-            string logLine = $"[{timestamp}] ⚠ {commandName} Response: TIMEOUT (no response received)";
-            File.AppendAllText(_outputFilePath, logLine + Environment.NewLine);
-            _logger.LogWarning(logLine);
+            string responseTimestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
+            string responseLog = $"[{responseTimestamp}] ✓ {commandName} Response received: {response.GetType().Name}";
+            File.AppendAllText(_outputFilePath, responseLog + Environment.NewLine);
+            _logger.LogInformation(responseLog);
+            return response;
         }
 
-        return response;
+        string timeoutTimestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
+        string timeoutLog = $"[{timeoutTimestamp}] ⚠ {commandName} Response timeout (ACK received, no protobuf response)";
+        File.AppendAllText(_outputFilePath, timeoutLog + Environment.NewLine);
+        _logger.LogWarning(timeoutLog);
+        return null;
     }
 
     private void OnChunkReceived(object? sender, GattCharacteristicValueChangedEventArgs e)
@@ -338,8 +416,8 @@ public class TrafficCaptureMode
         File.AppendAllText(_outputFilePath, logLine + Environment.NewLine);
         _logger.LogInformation(logLine);
 
-        // Feed chunk to response collector for protobuf parsing
-        _responseCollector.OnChunkReceived(chunk);
+        // Feed chunk to message collector for message type discrimination and parsing
+        _messageCollector.OnChunkReceived(chunk);
     }
 
     private void InitializeOutputFile()
