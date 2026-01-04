@@ -140,15 +140,28 @@ public class R10MessageFramer
             return message;
         }
 
-        // Try to wait for semaphore signal (from raw ACKs)
-        bool acquired = await _messageSemaphore.WaitAsync(TimeSpan.Zero, cancellationToken);
-        if (acquired && _messageQueue.TryDequeue(out message))
+        // Race: wait for EITHER ACK (semaphore) OR COBS message (collector)
+        // Whichever arrives first wins
+        Task<bool> ackWaitTask = _messageSemaphore.WaitAsync(timeout, cancellationToken);
+        Task<R10Message?> cobsWaitTask = _cobsCollector.WaitForMessageAsync(timeout, cancellationToken);
+
+        // Wait for whichever completes first
+        Task completedTask = await Task.WhenAny(ackWaitTask, cobsWaitTask);
+
+        // Check if ACK arrived first
+        if (completedTask == ackWaitTask && ackWaitTask.Result && _messageQueue.TryDequeue(out message))
         {
             return message;
         }
 
-        // No raw ACKs available, poll COBS collector for COBS messages
-        return await _cobsCollector.WaitForMessageAsync(timeout, cancellationToken);
+        // Check if COBS message arrived first (or ACK semaphore timed out)
+        if (cobsWaitTask.IsCompleted)
+        {
+            return await cobsWaitTask;
+        }
+
+        // Both timed out
+        return null;
     }
 
     /// <summary>
