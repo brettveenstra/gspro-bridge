@@ -16,6 +16,11 @@ public class TrafficCaptureMode
     private int _chunkCount;
     private readonly R10MessageCollector _messageCollector;
 
+    // Forensic tracking
+    private string _lastCommandSent = "None";
+    private DateTime _lastCommandTime = DateTime.MinValue;
+    private DateTime _lastPacketTime = DateTime.MinValue;
+
     // R10 GATT Service and Characteristics (confirmed via Gadgetbridge + community implementations)
     // DEVICE_INTERFACE service - for WakeUp/Subscribe commands
     private static readonly Guid _deviceInterfaceService = Guid.Parse("6A4E2800-667B-11E3-949A-0800200C9A66");
@@ -286,6 +291,10 @@ public class TrafficCaptureMode
 
     private async Task SendProtobufMessageAsync(GattCharacteristic txChar, IMessage message, string commandName, CancellationToken cancellationToken)
     {
+        // Forensic tracking: Record command being sent
+        _lastCommandSent = commandName;
+        _lastCommandTime = DateTime.UtcNow;
+
         // Frame and chunk the message using R10 protocol
         List<byte[]> chunks = R10Protocol.FrameAndChunkMessage(message);
 
@@ -406,18 +415,82 @@ public class TrafficCaptureMode
         }
 
         _chunkCount++;
+        DateTime now = DateTime.UtcNow;
 
-        string timestamp = DateTime.UtcNow.ToString("HH:mm:ss.fff");
+        string timestamp = now.ToString("HH:mm:ss.fff");
         string hex = R10Protocol.ToHexString(chunk);
 
-        string logLine = $"[{timestamp}] RX Chunk {_chunkCount:D4} ({chunk.Length} bytes): {hex}";
+        // === FORENSIC ANALYSIS ===
+        string formatType = AnalyzeFormatType(chunk);
+        string timingInfo = AnalyzeTimingContext(now);
+        string asciiInfo = ExtractPrintableAscii(chunk);
 
-        // Write to file AND console
+        // Basic log
+        string logLine = $"[{timestamp}] RX Chunk {_chunkCount:D4} ({chunk.Length} bytes): {hex}";
         File.AppendAllText(_outputFilePath, logLine + Environment.NewLine);
         _logger.LogInformation(logLine);
 
+        // Forensic context log
+        string forensicLog = $"  → Format: {formatType} | Context: After={_lastCommandSent} ({timingInfo}) | ASCII: {asciiInfo}";
+        File.AppendAllText(_outputFilePath, forensicLog + Environment.NewLine);
+        _logger.LogDebug(forensicLog);
+
+        _lastPacketTime = now;
+
         // Feed chunk to message collector for message type discrimination and parsing
         _messageCollector.OnChunkReceived(chunk);
+    }
+
+    private static string AnalyzeFormatType(byte[] chunk)
+    {
+        // Detect format type for forensic analysis
+        if (chunk.Length == 13 && chunk[0] == 0x00 && chunk[1] == 0x04)
+        {
+            byte statusCode = chunk[12];
+            return $"13-byte-ACK (status=0x{statusCode:X2})";
+        }
+
+        if (chunk.Length >= 2 && chunk[0] == 0x00)
+        {
+            return "COBS-Start (0x00 delimiter)";
+        }
+
+        if (chunk.Length >= 1 && chunk[^1] == 0x00)
+        {
+            return "COBS-End (0x00 delimiter)";
+        }
+
+        if (chunk.Length <= 3)
+        {
+            return $"Short-Packet ({chunk.Length}B)";
+        }
+
+        return "Unknown-Format";
+    }
+
+    private string AnalyzeTimingContext(DateTime now)
+    {
+        if (_lastCommandTime == DateTime.MinValue)
+        {
+            return "no-cmd-yet";
+        }
+
+        TimeSpan sinceCommand = now - _lastCommandTime;
+        TimeSpan sinceLastPacket = _lastPacketTime == DateTime.MinValue ? TimeSpan.Zero : now - _lastPacketTime;
+
+        return $"+{sinceCommand.TotalMilliseconds:F0}ms-from-cmd, +{sinceLastPacket.TotalMilliseconds:F0}ms-from-prev";
+    }
+
+    private static string ExtractPrintableAscii(byte[] chunk)
+    {
+        string ascii = string.Concat(chunk.Where(b =>
+        {
+            return b >= 32 && b < 127;
+        }).Select(b =>
+        {
+            return (char)b;
+        }));
+        return string.IsNullOrWhiteSpace(ascii) ? "(no-ascii)" : $"\"{ascii}\"";
     }
 
     private void InitializeOutputFile()
