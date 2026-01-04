@@ -54,17 +54,18 @@ try
             })
             .ConfigureServices((hostContext, services) =>
             {
-                // Register R10MessageCollector for DI
-                _ = services.AddSingleton<R10MessageCollector>();
+                // Register R10 protocol components for DI
+                _ = services.AddSingleton<R10MessageCollector>();      // COBS message collector
+                _ = services.AddSingleton<R10MessageFramer>();         // Dual-format framer (depends on collector)
             })
             .Build();
 
         // Resolve dependencies from DI container (composition root)
         ILogger<TrafficCaptureMode> logger = captureHost.Services.GetRequiredService<ILogger<TrafficCaptureMode>>();
-        R10MessageCollector messageCollector = captureHost.Services.GetRequiredService<R10MessageCollector>();
+        R10MessageFramer messageFramer = captureHost.Services.GetRequiredService<R10MessageFramer>();
 
         // Create TrafficCaptureMode with injected dependencies + runtime config
-        TrafficCaptureMode captureMode = new(logger, messageCollector, outputFile, duration);
+        TrafficCaptureMode captureMode = new(logger, messageFramer, outputFile, duration);
 
         await captureMode.RunAsync();
         return 0;

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using LaunchMonitor.Proto;
 using Microsoft.Extensions.Logging;
@@ -5,15 +6,16 @@ using Microsoft.Extensions.Logging;
 namespace GSProBridge.Bluetooth;
 
 /// <summary>
-/// Collects RX chunks from R10 and parses them into complete messages
-/// Handles message boundary detection, COBS decoding, and message type discrimination
+/// Collects COBS-encoded RX chunks from R10 and parses them into complete messages
+/// Handles message boundary detection, COBS decoding, and protocol message parsing
 /// Message boundaries: chunks start with 0x00, end with 0x00 (after BLE header byte)
+/// NOTE: Raw 13-byte ACKs are NOT handled by this collector - see R10MessageFramer
 /// </summary>
 public class R10MessageCollector
 {
     private readonly ILogger<R10MessageCollector> _logger;
     private readonly List<byte> _currentMessageData = new();
-    private readonly Queue<R10Message> _parsedMessages = new();
+    private readonly ConcurrentQueue<R10Message> _parsedMessages = new();
     private readonly SemaphoreSlim _messageSemaphore = new(0);
 
     /// <summary>
@@ -22,14 +24,17 @@ public class R10MessageCollector
     /// <param name="logger">Logger for protocol analysis and debugging</param>
     public R10MessageCollector(ILogger<R10MessageCollector> logger)
     {
+        ArgumentNullException.ThrowIfNull(logger);
+
         _logger = logger;
     }
 
     /// <summary>
     /// Handles incoming RX chunk from R10
-    /// Chunk format: [BLE_HEADER:1] [CHUNK_DATA:N]
+    /// COBS message format: 0x00 [COBS_DATA] 0x00 (delimiters)
+    /// NOTE: No BLE header - chunks from GattCharacteristicValueChanged are raw protocol data
     /// </summary>
-    /// <param name="chunk">Raw chunk bytes including BLE header</param>
+    /// <param name="chunk">Raw chunk bytes from BLE notification</param>
     public void OnChunkReceived(byte[] chunk)
     {
         ArgumentNullException.ThrowIfNull(chunk);
@@ -39,34 +44,31 @@ public class R10MessageCollector
             return;
         }
 
-        // Skip BLE header (first byte) - R10 protocol frame structure
-        byte[] chunkData = chunk.Skip(1).ToArray();
+        // Check for new message start (chunk begins with 0x00 delimiter)
+        if (chunk[0] == 0x00)
+        {
+            // Discard incomplete previous message
+            _currentMessageData.Clear();
+            // Remove start delimiter and use remaining data
+            chunk = chunk.Skip(1).ToArray();
+        }
 
-        if (chunkData.Length == 0)
+        if (chunk.Length == 0)
         {
             return;
         }
 
-        // Check for new message start (chunk data begins with 0x00)
-        if (chunkData[0] == 0x00)
-        {
-            // Discard incomplete previous message
-            _currentMessageData.Clear();
-            // Remove start delimiter
-            chunkData = chunkData.Skip(1).ToArray();
-        }
-
-        // Check for message completion (chunk data ends with 0x00)
+        // Check for message completion (chunk ends with 0x00 delimiter)
         bool messageComplete = false;
-        if (chunkData.Length > 0 && chunkData[^1] == 0x00)
+        if (chunk[^1] == 0x00)
         {
             messageComplete = true;
             // Remove end delimiter
-            chunkData = chunkData.SkipLast(1).ToArray();
+            chunk = chunk.SkipLast(1).ToArray();
         }
 
         // Accumulate chunk data
-        _currentMessageData.AddRange(chunkData);
+        _currentMessageData.AddRange(chunk);
 
         if (messageComplete && _currentMessageData.Count > 0)
         {
@@ -90,6 +92,8 @@ public class R10MessageCollector
 
     /// <summary>
     /// Parses COBS-encoded message into R10Message with type discrimination
+    /// Handles COBS messages only: 0x13B3 (Request), 0x13B4 (Response)
+    /// NOTE: Raw 13-byte ACKs (0x1388) are NOT handled here - see R10MessageFramer
     /// Includes defensive logging for protocol analysis and debugging
     /// </summary>
     /// <param name="cobsEncoded">COBS-encoded message bytes</param>
@@ -139,7 +143,8 @@ public class R10MessageCollector
             ushort protocolHeader = BitConverter.ToUInt16(protocolMessage, 0);
 
             // Defensive logging: log unknown headers for protocol discovery
-            if (protocolHeader != 0x1388 && protocolHeader != 0x13B4 && protocolHeader != 0x13B3)
+            // NOTE: 0x1388 ACKs are handled by R10MessageFramer (raw format, not COBS)
+            if (protocolHeader != 0x13B4 && protocolHeader != 0x13B3)
             {
                 _logger.LogWarning(
                     "UNKNOWN protocol header: 0x{Header:X4} - Message: {MessageHex}",
@@ -149,7 +154,6 @@ public class R10MessageCollector
 
             return protocolHeader switch
             {
-                0x1388 => ParseAcknowledgment(protocolMessage),      // ACK
                 0x13B4 => ParseProtobufResponse(protocolMessage),    // Response
                 0x13B3 => ParseProtobufRequest(protocolMessage),     // Request from R10
                 _ => new R10Message
@@ -163,32 +167,6 @@ public class R10MessageCollector
         {
             return null;
         }
-    }
-
-    /// <summary>
-    /// Parses ACK message (protocol header: 88 13)
-    /// Format: 88 13 [counter:2] [ack_body:N]
-    /// </summary>
-    private static R10Message ParseAcknowledgment(byte[] protocolMessage)
-    {
-        if (protocolMessage.Length < 4)
-        {
-            return new R10Message
-            {
-                Type = R10MessageType.Unknown,
-                RawData = ImmutableArray.Create(protocolMessage)
-            };
-        }
-
-        ushort counter = BitConverter.ToUInt16(protocolMessage, 2);
-        byte[] ackBody = protocolMessage.Skip(4).ToArray();
-
-        return new R10Message
-        {
-            Type = R10MessageType.Acknowledgment,
-            Counter = counter,
-            RawData = ImmutableArray.Create(ackBody)
-        };
     }
 
     /// <summary>
@@ -251,12 +229,20 @@ public class R10MessageCollector
     {
         bool received = await _messageSemaphore.WaitAsync(timeout, cancellationToken);
 
-        if (!received || _parsedMessages.Count == 0)
+        if (!received)
         {
-            return null; // Timeout or no message
+            return null; // Timeout
         }
 
-        return _parsedMessages.Dequeue();
+        // Semaphore acquired, try to dequeue message
+        if (_parsedMessages.TryDequeue(out R10Message? message))
+        {
+            return message;
+        }
+
+        // Edge case: semaphore signaled but queue empty (shouldn't happen)
+        _logger.LogWarning("Semaphore acquired but queue empty - unexpected state");
+        return null;
     }
 
     /// <summary>

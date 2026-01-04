@@ -23,19 +23,21 @@ public class R10MessageCollectorTests
     }
 
     /// <summary>
-    /// Tests ACK message parsing with protocol header 0x1388
+    /// Tests COBS-encoded ACK (0x1388) parsing - now returns Unknown
+    /// NOTE: Real R10 ACKs are raw 13-byte chunks (handled by R10MessageFramer)
+    /// COBS-encoded ACKs don't exist in real protocol, but collector handles gracefully
     /// </summary>
     [Test]
-    public async Task OnChunkReceived_WakeUpAck_ParsesAsAcknowledgment()
+    public async Task OnChunkReceived_WakeUpAck_ParsesAsUnknown()
     {
-        // Arrange - Synthetic WakeUp ACK message
+        // Arrange - Synthetic COBS-encoded ACK message (doesn't exist in real protocol)
         // Format: [BLE_HEADER:1] 00 [COBS_ENCODED_FRAME] 00
         // Frame: [length:2] 88 13 [counter:2] [ack_body] [CRC:2]
 
         // Build frame: 88 13 (ACK header) + 01 00 (counter=1) + 00 01 00 00 00 00 00 00 00 00 (ACK body)
         byte[] protocolMessage = new byte[]
         {
-            0x88, 0x13, // Protocol header: ACK
+            0x88, 0x13, // Protocol header: ACK (0x1388)
             0x01, 0x00, // Counter: 1
             0x00, 0x01, 0x00, // ACK body start
             0x00, 0x00, 0x00, 0x00, 0x00 // ACK body padding (7 zero bytes total)
@@ -57,12 +59,8 @@ public class R10MessageCollectorTests
         // COBS encode
         byte[] cobsEncoded = CobsEncoding.Encode(frame.ToArray()).ToArray();
 
-        // Build BLE chunk: [BLE_HEADER:1] 00 [COBS_DATA] 00
-        List<byte> chunk =
-        [
-            0x20,  // BLE header (example value)
-            0x00   // Message start delimiter
-        ];
+        // Build BLE chunk: 00 [COBS_DATA] 00 (no BLE header)
+        List<byte> chunk = [0x00]; // Message start delimiter
         chunk.AddRange(cobsEncoded);
         chunk.Add(0x00); // Message end delimiter
 
@@ -72,9 +70,9 @@ public class R10MessageCollectorTests
 
         // Assert
         _ = message.ShouldNotBeNull();
-        message.Type.ShouldBe(R10MessageType.Acknowledgment);
-        message.Counter.ShouldBe((ushort)1);
-        message.Protobuf.ShouldBeNull(); // ACKs don't have protobuf payloads
+        message.Type.ShouldBe(R10MessageType.Unknown); // Collector no longer parses ACKs (0x1388)
+        message.Counter.ShouldBe((ushort)0); // Unknown messages don't have parsed counter
+        message.Protobuf.ShouldBeNull();
     }
 
     /// <summary>
@@ -104,11 +102,7 @@ public class R10MessageCollectorTests
 
         byte[] cobsEncoded = CobsEncoding.Encode(frame.ToArray()).ToArray();
 
-        List<byte> chunk =
-        [
-            0x20,  // BLE header
-            0x00   // Message start delimiter
-        ];
+        List<byte> chunk = [0x00]; // Message start delimiter (no BLE header)
         chunk.AddRange(cobsEncoded);
         chunk.Add(0x00); // Message end delimiter
 
@@ -128,14 +122,16 @@ public class R10MessageCollectorTests
     [Test]
     public async Task OnChunkReceived_MultiChunkMessage_AssemblesCorrectly()
     {
-        // Arrange - Split a small ACK message across 2 chunks
+        // Arrange - Split a small Response message across 2 chunks
+        // Format: B4 13 [counter:2] 00 00 [length:4] [length:4] [protobuf]
         byte[] protocolMessage = new byte[]
         {
-            0x88, 0x13, // ACK header
+            0xB4, 0x13, // Response header (0x13B4)
             0x02, 0x00, // Counter: 2
-            0x00, 0x02, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00
-        };
+            0x00, 0x00, // Padding
+            0x00, 0x00, 0x00, 0x00, // Length field 1
+            0x00, 0x00, 0x00, 0x00  // Length field 2
+        }; // Total: 14 bytes (minimum for ParseProtobufResponse)
 
         ushort frameLength = (ushort)(2 + protocolMessage.Length + 2);
         byte[] lengthBytes = BitConverter.GetBytes(frameLength);
@@ -155,16 +151,12 @@ public class R10MessageCollectorTests
         byte[] chunk1Data = cobsEncoded.Take(splitPoint).ToArray();
         byte[] chunk2Data = cobsEncoded.Skip(splitPoint).ToArray();
 
-        // Chunk 1: [BLE_HEADER] 00 [FIRST_HALF]
-        List<byte> chunk1 =
-        [
-            0x20,  // BLE header
-            0x00   // Start delimiter
-        ];
+        // Chunk 1: 00 [FIRST_HALF] (no BLE header)
+        List<byte> chunk1 = [0x00]; // Start delimiter
         chunk1.AddRange(chunk1Data);
 
-        // Chunk 2: [BLE_HEADER] [SECOND_HALF] 00
-        List<byte> chunk2 = [0x20]; // BLE header
+        // Chunk 2: [SECOND_HALF] 00 (no BLE header)
+        List<byte> chunk2 = [];
         chunk2.AddRange(chunk2Data);
         chunk2.Add(0x00); // End delimiter
 
@@ -178,7 +170,7 @@ public class R10MessageCollectorTests
 
         // Assert
         _ = message2.ShouldNotBeNull();
-        message2.Type.ShouldBe(R10MessageType.Acknowledgment);
+        message2.Type.ShouldBe(R10MessageType.ProtobufResponse); // Response header (0x13B4)
         message2.Counter.ShouldBe((ushort)2);
     }
 
@@ -210,11 +202,7 @@ public class R10MessageCollectorTests
 
         byte[] cobsEncoded = CobsEncoding.Encode(frame.ToArray()).ToArray();
 
-        List<byte> chunk =
-        [
-            0x20,  // BLE header
-            0x00   // Message start delimiter
-        ];
+        List<byte> chunk = [0x00]; // Message start delimiter (no BLE header)
         chunk.AddRange(cobsEncoded);
         chunk.Add(0x00); // Message end delimiter
 
@@ -233,11 +221,7 @@ public class R10MessageCollectorTests
     public void Clear_WithBufferedData_ResetsState()
     {
         // Arrange - Send partial chunk (no end delimiter)
-        List<byte> partialChunk =
-        [
-            0x20,  // BLE header
-            0x00   // Start delimiter
-        ];
+        List<byte> partialChunk = [0x00]; // Start delimiter (no BLE header)
         partialChunk.AddRange([0x01, 0x02, 0x03]); // Partial data
 
         _collector.OnChunkReceived(partialChunk.ToArray());

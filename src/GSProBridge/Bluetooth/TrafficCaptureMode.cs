@@ -14,7 +14,7 @@ public class TrafficCaptureMode
     private readonly string _outputFilePath;
     private readonly int _durationSeconds;
     private int _chunkCount;
-    private readonly R10MessageCollector _messageCollector;
+    private readonly R10MessageFramer _messageFramer;
 
     // Forensic tracking
     private string _lastCommandSent = "None";
@@ -42,13 +42,13 @@ public class TrafficCaptureMode
     /// Initializes a new instance of the <see cref="TrafficCaptureMode"/> class
     /// </summary>
     /// <param name="logger">Logger instance</param>
-    /// <param name="messageCollector">Message collector for parsing R10 protocol messages</param>
+    /// <param name="messageFramer">Message framer for dual-format R10 protocol (COBS + raw ACKs)</param>
     /// <param name="outputFilePath">Output file path for captured hex traffic</param>
     /// <param name="durationSeconds">Capture duration in seconds (default 60)</param>
-    public TrafficCaptureMode(ILogger<TrafficCaptureMode> logger, R10MessageCollector messageCollector, string outputFilePath, int durationSeconds = 60)
+    public TrafficCaptureMode(ILogger<TrafficCaptureMode> logger, R10MessageFramer messageFramer, string outputFilePath, int durationSeconds = 60)
     {
         _logger = logger;
-        _messageCollector = messageCollector;
+        _messageFramer = messageFramer;
         _outputFilePath = outputFilePath;
         _durationSeconds = durationSeconds;
     }
@@ -334,13 +334,13 @@ public class TrafficCaptureMode
     private async Task<bool> SendRequestWithAckAsync(GattCharacteristic txChar, IMessage message, string commandName, CancellationToken cancellationToken)
     {
         // Clear any buffered messages before sending new request
-        _messageCollector.Clear();
+        _messageFramer.Clear();
 
         // Send the request
         await SendProtobufMessageAsync(txChar, message, commandName, cancellationToken);
 
         // Wait for ACK (1 second timeout)
-        R10Message? ack = await _messageCollector.WaitForMessageAsync(TimeSpan.FromSeconds(1), cancellationToken);
+        R10Message? ack = await _messageFramer.WaitForMessageAsync(TimeSpan.FromSeconds(1), cancellationToken);
 
         if (ack?.Type == R10MessageType.Acknowledgment)
         {
@@ -365,13 +365,13 @@ public class TrafficCaptureMode
     private async Task<WrapperProto?> SendRequestWithResponseAsync(GattCharacteristic txChar, IMessage message, string commandName, CancellationToken cancellationToken)
     {
         // Clear any buffered messages before sending new request
-        _messageCollector.Clear();
+        _messageFramer.Clear();
 
         // Send the request
         await SendProtobufMessageAsync(txChar, message, commandName, cancellationToken);
 
         // Wait for ACK first (1 second timeout)
-        R10Message? ack = await _messageCollector.WaitForMessageAsync(TimeSpan.FromSeconds(1), cancellationToken);
+        R10Message? ack = await _messageFramer.WaitForMessageAsync(TimeSpan.FromSeconds(1), cancellationToken);
 
         if (ack?.Type != R10MessageType.Acknowledgment)
         {
@@ -388,7 +388,7 @@ public class TrafficCaptureMode
         _logger.LogDebug(ackReceivedLog);
 
         // Wait for protobuf response (5 second timeout)
-        WrapperProto? response = await _messageCollector.WaitForProtobufResponseAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        WrapperProto? response = await _messageFramer.WaitForProtobufResponseAsync(TimeSpan.FromSeconds(5), cancellationToken);
 
         if (response != null)
         {
@@ -438,7 +438,7 @@ public class TrafficCaptureMode
         _lastPacketTime = now;
 
         // Feed chunk to message collector for message type discrimination and parsing
-        _messageCollector.OnChunkReceived(chunk);
+        _messageFramer.OnChunkReceived(chunk);
     }
 
     private static string AnalyzeFormatType(byte[] chunk)
@@ -514,10 +514,31 @@ public class TrafficCaptureMode
     {
         try
         {
-            GattService batteryService = await device.Gatt.GetPrimaryServiceAsync(_batteryService);
-            GattCharacteristic batteryChar = await batteryService.GetCharacteristicAsync(_batteryLevelCharacteristic);
-            byte[]? batteryData = await batteryChar.ReadValueAsync();
+            // Guard against temporal issues (device disconnecting, Gatt not initialized)
+            if (device.Gatt == null)
+            {
+                _logger.LogDebug("Device Gatt interface is null (device may be disconnecting)");
+                File.AppendAllText(_outputFilePath, $"# Battery service: Not available (device state issue){Environment.NewLine}");
+                return;
+            }
 
+            GattService? batteryService = await device.Gatt.GetPrimaryServiceAsync(_batteryService);
+            if (batteryService == null)
+            {
+                _logger.LogDebug("Battery service not found on device");
+                File.AppendAllText(_outputFilePath, $"# Battery service: Not available{Environment.NewLine}");
+                return;
+            }
+
+            GattCharacteristic? batteryChar = await batteryService.GetCharacteristicAsync(_batteryLevelCharacteristic);
+            if (batteryChar == null)
+            {
+                _logger.LogDebug("Battery level characteristic not found");
+                File.AppendAllText(_outputFilePath, $"# Battery service: Not available{Environment.NewLine}");
+                return;
+            }
+
+            byte[]? batteryData = await batteryChar.ReadValueAsync();
             if (batteryData != null && batteryData.Length > 0)
             {
                 int batteryLevel = batteryData[0]; // Battery level is 0-100%
@@ -537,10 +558,31 @@ public class TrafficCaptureMode
     {
         try
         {
-            GattService deviceInfoService = await device.Gatt.GetPrimaryServiceAsync(_deviceInfoService);
-            GattCharacteristic firmwareChar = await deviceInfoService.GetCharacteristicAsync(_firmwareRevisionCharacteristic);
-            byte[]? firmwareData = await firmwareChar.ReadValueAsync();
+            // Guard against temporal issues (device disconnecting, Gatt not initialized)
+            if (device.Gatt == null)
+            {
+                _logger.LogDebug("Device Gatt interface is null (device may be disconnecting)");
+                File.AppendAllText(_outputFilePath, $"# Device Information service: Not available (device state issue){Environment.NewLine}");
+                return;
+            }
 
+            GattService? deviceInfoService = await device.Gatt.GetPrimaryServiceAsync(_deviceInfoService);
+            if (deviceInfoService == null)
+            {
+                _logger.LogDebug("Device Information service not found on device");
+                File.AppendAllText(_outputFilePath, $"# Device Information service: Not available{Environment.NewLine}");
+                return;
+            }
+
+            GattCharacteristic? firmwareChar = await deviceInfoService.GetCharacteristicAsync(_firmwareRevisionCharacteristic);
+            if (firmwareChar == null)
+            {
+                _logger.LogDebug("Firmware revision characteristic not found");
+                File.AppendAllText(_outputFilePath, $"# Device Information service: Not available{Environment.NewLine}");
+                return;
+            }
+
+            byte[]? firmwareData = await firmwareChar.ReadValueAsync();
             if (firmwareData != null && firmwareData.Length > 0)
             {
                 string firmwareVersion = System.Text.Encoding.UTF8.GetString(firmwareData);
